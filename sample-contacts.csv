@@ -1,0 +1,6 @@
+email,first_name,last_name,company,title,phone,notes
+john.doe@acme.com,John,Doe,Acme Corp,CTO,+1-555-0100,Met at conference
+jane.smith@techco.io,Jane,Smith,TechCo,IT Director,+1-555-0101,Referred by partner
+mike.johnson@startup.dev,Mike,Johnson,StartupDev,CEO,+1-555-0102,Interested in cloud migration
+sarah.williams@enterprise.com,Sarah,Williams,Enterprise Inc,VP Engineering,+1-555-0103,Legacy system modernization
+david.brown@healthnet.org,David,Brown,HealthNet,CIO,+1-555-0104,HIPAA compliance focus

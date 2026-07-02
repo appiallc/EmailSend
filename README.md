@@ -1,36 +1,58 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# MailTrack
 
-## Getting Started
+Email outreach webapp for any business — import contacts from CSV, send personalized campaigns, track opens/clicks, and automatically follow up after one week.
 
-First, run the development server:
+## Features
+
+- **CSV contact import** with flexible column names
+- **Personalized bulk email** via SMTP (`{{first_name}}`, `{{company}}`, etc.)
+- **Open & click tracking** via pixel and link redirects
+- **Automatic follow-ups** after 7 days (configurable) for non-repliers
+- **Reply detection** via IMAP or manual marking
+- **Campaign dashboard** with send/open/reply stats
+
+## Quick Start
 
 ```bash
+npm install
+npx prisma migrate dev
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+1. Go to **Settings** and configure SMTP (required to send).
+2. Go to **Contacts** and upload your CSV (see `sample-contacts.csv`).
+3. Go to **Campaigns**, create a campaign, edit templates, and click **Send to All**.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## CSV Format
 
-## Learn More
+```csv
+email,first_name,last_name,company,title,phone,notes
+john.doe@acme.com,John,Doe,Acme Corp,CTO,+1-555-0100,Met at conference
+```
 
-To learn more about Next.js, take a look at the following resources:
+Only `email` is required. Download a sample from the Contacts page or use `sample-contacts.csv`.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Documentation
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+- **[Technical Documentation](docs/TECHNICAL.md)** — architecture, API reference, database schema, tracking system, deployment guide, and security notes.
 
-## Deploy on Vercel
+## Tech Stack
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Next.js 16 · React 19 · TypeScript · Prisma · SQLite · Nodemailer · Tailwind CSS
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Scripts
+
+| Command | Description |
+|---------|-------------|
+| `npm run dev` | Development server |
+| `npm run build` | Production build |
+| `npm run start` | Production server |
+| `npx prisma studio` | Database GUI |
+
+## Production Notes
+
+- Set **Base URL** in Settings to your public domain (required for tracking).
+- Configure SPF/DKIM on your sending domain.
+- Add authentication before exposing to the internet — see [Security Considerations](docs/TECHNICAL.md#security-considerations).
