@@ -39,7 +39,7 @@ export default function CampaignsPage() {
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<Campaign | null>(null);
-  const [sending, setSending] = useState(false);
+  const [sendingId, setSendingId] = useState<string | null>(null);
   const [message, setMessage] = useState("");
   const [viewing, setViewing] = useState<Campaign | null>(null);
 
@@ -88,20 +88,41 @@ export default function CampaignsPage() {
 
   const sendCampaign = async (id: string) => {
     if (!confirm("Send this campaign to ALL contacts? This cannot be undone.")) return;
-    setSending(true);
+    setSendingId(id);
     setMessage("");
-    const res = await fetch("/api/campaigns/send", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ campaignId: id, action: "send" }),
+    try {
+      const res = await fetch("/api/campaigns/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ campaignId: id, action: "send" }),
+      });
+      const data = await res.json();
+      if (data.error) {
+        setMessage(`Error: ${data.error}`);
+      } else {
+        setMessage(`Sent ${data.sent} email(s). ${data.failed} failed.`);
+      }
+      load();
+    } finally {
+      setSendingId(null);
+    }
+  };
+
+  const deleteCampaign = async (id: string) => {
+    if (!confirm("Delete this campaign and all of its email logs? This cannot be undone.")) return;
+    const res = await fetch(`/api/campaigns?id=${encodeURIComponent(id)}`, {
+      method: "DELETE",
     });
     const data = await res.json();
-    setSending(false);
+
     if (data.error) {
       setMessage(`Error: ${data.error}`);
-    } else {
-      setMessage(`Sent ${data.sent} email(s). ${data.failed} failed.`);
+      return;
     }
+
+    setMessage("Campaign deleted.");
+    if (editing?.id === id) setEditing(null);
+    if (viewing?.id === id) setViewing(null);
     load();
   };
 
@@ -332,11 +353,17 @@ export default function CampaignsPage() {
                     Edit
                   </button>
                   <button
+                    onClick={() => deleteCampaign(c.id)}
+                    className="px-3 py-1.5 text-xs border border-red-200 text-red-600 rounded-lg hover:bg-red-50"
+                  >
+                    Delete
+                  </button>
+                  <button
                     onClick={() => sendCampaign(c.id)}
-                    disabled={sending || c.status === "sending"}
+                    disabled={sendingId !== null || c.status === "sending"}
                     className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded-lg disabled:opacity-50"
                   >
-                    {sending ? "Sending..." : "Send to All"}
+                    {sendingId === c.id ? "Sending..." : "Send to All"}
                   </button>
                 </div>
               </div>

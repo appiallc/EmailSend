@@ -15,6 +15,9 @@ export function createTransporter(settings: Settings) {
       user: settings.smtpUser,
       pass: settings.smtpPass,
     },
+    connectionTimeout: 10_000,
+    greetingTimeout: 10_000,
+    socketTimeout: 20_000,
   });
 }
 

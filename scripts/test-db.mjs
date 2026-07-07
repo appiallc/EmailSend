@@ -13,11 +13,20 @@ console.log(`Testing: ${masked}\n`);
 
 const prisma = new PrismaClient();
 
+const isPostgres = url.startsWith("postgresql://") || url.startsWith("postgres://");
+
 try {
   await prisma.$queryRaw`SELECT 1 AS ok`;
-  const tables = await prisma.$queryRaw`
-    SELECT name AS tablename FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
-  `;
+  const tables = isPostgres
+    ? await prisma.$queryRaw`
+        SELECT table_name AS tablename
+        FROM information_schema.tables
+        WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+        ORDER BY table_name
+      `
+    : await prisma.$queryRaw`
+        SELECT name AS tablename FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+      `;
   console.log("✅ Database connection successful");
   if (tables.length === 0) {
     console.log("⚠️  Connected but no tables yet. Run: npx prisma db push");

@@ -45,12 +45,29 @@ export default function SettingsPage() {
 
   const runScheduler = async () => {
     setChecking(true);
-    const res = await fetch("/api/scheduler/run", { method: "POST" });
-    const data = await res.json();
-    setChecking(false);
-    setMessage(
-      `Scheduler run complete: ${data.replies} reply(ies) detected, ${data.followUps} follow-up(s) sent.`
-    );
+    setMessage("");
+
+    try {
+      const res = await fetch("/api/scheduler/run", { method: "POST" });
+      const data = await res.json();
+
+      if (!res.ok) {
+        setMessage(`Error: ${data.error || "Scheduler run failed"}`);
+        return;
+      }
+
+      let msg = `Scheduler run complete: ${data.replies} reply(ies) detected, ${data.followUps} follow-up(s) sent.`;
+      if (data.errors?.length) {
+        msg += ` Issues: ${data.errors.join("; ")}`;
+      }
+      setMessage(msg);
+    } catch (err) {
+      setMessage(
+        `Error: ${err instanceof Error ? err.message : "Scheduler run failed"}`
+      );
+    } finally {
+      setChecking(false);
+    }
   };
 
   if (!settings) {
@@ -109,7 +126,13 @@ export default function SettingsPage() {
         <section className="bg-white rounded-xl border p-6 shadow-sm">
           <h2 className="font-semibold mb-4">Company</h2>
           {field("Company Name", "companyName")}
-          {field("Base URL (for tracking pixels)", "baseUrl", "text", "http://localhost:3000")}
+          {field("Base URL (for tracking pixels)", "baseUrl", "text", "https://your-app.example.com")}
+          {settings.baseUrl.includes("localhost") && (
+            <p className="mt-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+              Open/click tracking will not work for recipients while Base URL is localhost.
+              Use a public URL (deployed app or a tunnel like ngrok) so email clients can load the tracking pixel.
+            </p>
+          )}
         </section>
 
         <section className="bg-white rounded-xl border p-6 shadow-sm">
