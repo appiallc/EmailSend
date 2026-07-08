@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { StatCard } from "@/components/StatCard";
+import { Loader } from "@/components/Loader";
 import Link from "next/link";
 
 interface Stats {
@@ -30,11 +31,7 @@ export default function DashboardPage() {
   }, []);
 
   if (!stats) {
-    return (
-      <div className="p-8">
-        <p className="text-slate-500">Loading dashboard...</p>
-      </div>
-    );
+    return <Loader fullPage />;
   }
 
   const totalSent = stats.statusCounts.sent || 0;

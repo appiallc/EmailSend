@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useRef } from "react";
 import { CSV_FORMAT } from "@/lib/csv";
+import { Loader } from "@/components/Loader";
 
 interface Contact {
   id: string;
@@ -136,7 +137,9 @@ export default function ContactsPage() {
 
       <div className="bg-white rounded-xl border shadow-sm overflow-hidden">
         {loading ? (
-          <p className="p-8 text-slate-500 text-sm">Loading contacts...</p>
+          <div className="min-h-[320px] flex items-center justify-center">
+            <Loader />
+          </div>
         ) : contacts.length === 0 ? (
           <div className="p-12 text-center">
             <p className="text-slate-500 mb-4">No contacts yet. Upload a CSV to get started.</p>

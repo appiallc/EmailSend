@@ -7,6 +7,7 @@ import {
   DEFAULT_INITIAL_BODY,
   DEFAULT_INITIAL_SUBJECT,
 } from "@/lib/templates";
+import { Loader } from "@/components/Loader";
 
 interface EmailLog {
   id: string;
@@ -264,7 +265,12 @@ export default function CampaignsPage() {
       {viewing && (
         <div className="mb-8 bg-white rounded-xl border shadow-sm overflow-hidden">
           <div className="px-6 py-4 border-b flex items-center justify-between">
-            <h2 className="font-semibold">{viewing.name} — Tracking</h2>
+            <div>
+              <h2 className="font-semibold">{viewing.name} — Tracking</h2>
+              <p className="text-xs text-slate-400 mt-1">
+                Opens are counted only 60+ seconds after send to filter automatic email prefetch.
+              </p>
+            </div>
             <button onClick={() => setViewing(null)} className="text-sm text-slate-500 hover:text-slate-800">
               Close
             </button>
@@ -316,7 +322,9 @@ export default function CampaignsPage() {
 
       <div className="space-y-4">
         {loading ? (
-          <p className="text-slate-500 text-sm">Loading campaigns...</p>
+          <div className="bg-white rounded-xl border shadow-sm min-h-[320px] flex items-center justify-center">
+            <Loader />
+          </div>
         ) : campaigns.length === 0 ? (
           <div className="bg-white rounded-xl border p-12 text-center">
             <p className="text-slate-500 mb-4">No campaigns yet.</p>

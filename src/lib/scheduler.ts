@@ -1,32 +1,31 @@
 import cron from "node-cron";
-import { checkForReplies } from "./replies";
-import { processDueFollowUps } from "./campaign";
+import { runFollowUpProcessing, runReplyCheck } from "./scheduler-tasks";
 
 let started = false;
 
+// In-process cron only runs during local dev or on a long-running Node server.
+// On Vercel serverless, use /api/cron/replies and /api/cron/follow-ups instead.
 export function startScheduler() {
   if (started) return;
+  if (process.env.VERCEL === "1") {
+    console.log("[scheduler] Skipped on Vercel — use /api/cron/* routes with an external scheduler");
+    return;
+  }
   started = true;
 
-  // Check for replies every 15 minutes
   cron.schedule("*/15 * * * *", async () => {
-    try {
-      const count = await checkForReplies();
-      if (count > 0) console.log(`[scheduler] Marked ${count} email(s) as replied`);
-    } catch (err) {
-      console.error("[scheduler] Reply check failed:", err);
+    const result = await runReplyCheck();
+    if (result.count > 0) {
+      console.log(`[scheduler] Marked ${result.count} email(s) as replied`);
     }
   });
 
-  // Process follow-ups every hour
   cron.schedule("0 * * * *", async () => {
-    try {
-      const count = await processDueFollowUps();
-      if (count > 0) console.log(`[scheduler] Sent ${count} follow-up(s)`);
-    } catch (err) {
-      console.error("[scheduler] Follow-up processing failed:", err);
+    const result = await runFollowUpProcessing();
+    if (result.count > 0) {
+      console.log(`[scheduler] Sent ${result.count} follow-up(s)`);
     }
   });
 
-  console.log("[scheduler] Email follow-up & reply checker started");
+  console.log("[scheduler] Local reply check (15 min) and follow-ups (hourly) started");
 }

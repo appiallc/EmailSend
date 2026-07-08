@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Loader } from "@/components/Loader";
 
 interface Settings {
   companyName: string;
@@ -71,11 +72,7 @@ export default function SettingsPage() {
   };
 
   if (!settings) {
-    return (
-      <div className="p-8">
-        <p className="text-slate-500">Loading settings...</p>
-      </div>
-    );
+    return <Loader fullPage />;
   }
 
   const field = (
@@ -164,7 +161,7 @@ export default function SettingsPage() {
         <section className="bg-white rounded-xl border p-6 shadow-sm">
           <h2 className="font-semibold mb-1">IMAP — Reply Detection</h2>
           <p className="text-xs text-slate-400 mb-4">
-            Optional. Checks your inbox every 15 min for replies to sent emails.
+            Optional. Checks your inbox for replies to sent emails (every 15 min when scheduler is configured).
           </p>
           <div className="grid grid-cols-2 gap-4">
             {field("IMAP Host", "imapHost", "text", "imap.gmail.com")}
@@ -177,8 +174,36 @@ export default function SettingsPage() {
         <section className="bg-white rounded-xl border p-6 shadow-sm">
           <h2 className="font-semibold mb-1">Scheduler</h2>
           <p className="text-xs text-slate-400 mb-4">
-            Follow-ups run automatically every hour. Use this to trigger manually.
+            On Vercel, automatic jobs need an external scheduler (e.g.{" "}
+            <a
+              href="https://cron-job.org"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-blue-600 hover:underline"
+            >
+              cron-job.org
+            </a>
+            ). Local <code className="text-[11px]">npm run dev</code> runs them in-process.
           </p>
+          <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600 space-y-2">
+            <p className="font-medium text-slate-700">Vercel cron URLs (add header below)</p>
+            <p>
+              Reply check every 15 min:{" "}
+              <code className="break-all">
+                {settings.baseUrl.replace(/\/$/, "")}/api/cron/replies
+              </code>
+            </p>
+            <p>
+              Follow-ups every hour:{" "}
+              <code className="break-all">
+                {settings.baseUrl.replace(/\/$/, "")}/api/cron/follow-ups
+              </code>
+            </p>
+            <p>
+              Header: <code>Authorization: Bearer YOUR_CRON_SECRET</code>
+            </p>
+            <p>Set <code>CRON_SECRET</code> in Vercel → Settings → Environment Variables.</p>
+          </div>
           <button
             onClick={runScheduler}
             disabled={checking}
