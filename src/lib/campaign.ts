@@ -1,6 +1,7 @@
 import { prisma } from "./db";
 import { getSettings } from "./db";
 import { sendTrackedEmail } from "./email";
+import type { Contact } from "@prisma/client";
 
 export async function sendCampaignEmails(campaignId: string, type: "initial" | "followup" = "initial") {
   const campaign = await prisma.campaign.findUnique({ where: { id: campaignId } });
@@ -110,14 +111,14 @@ export async function processDueFollowUps(): Promise<number> {
     });
     if (existingFollowUp) continue;
 
-    const replied = await prisma.emailLog.findFirst({
+    const repliedOrBounced = await prisma.emailLog.findFirst({
       where: {
         campaignId: log.campaignId,
         contactId: log.contactId,
-        status: "replied",
+        status: { in: ["replied", "bounced"] },
       },
     });
-    if (replied) continue;
+    if (repliedOrBounced) continue;
 
     await prisma.emailLog.create({
       data: {
@@ -140,12 +141,8 @@ export async function processDueFollowUps(): Promise<number> {
 
 export async function createCampaignWithContacts(
   campaignId: string,
-  contactIds?: string[]
+  contacts: Contact[]
 ) {
-  const contacts = contactIds?.length
-    ? await prisma.contact.findMany({ where: { id: { in: contactIds } } })
-    : await prisma.contact.findMany();
-
   const existing = await prisma.emailLog.findMany({
     where: { campaignId, type: "initial" },
     select: { contactId: true },

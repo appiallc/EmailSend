@@ -1,11 +1,19 @@
 import Imap from "imap";
 import { simpleParser } from "mailparser";
 import { prisma } from "./db";
+import { mailFromParsed, parseBounceEmail } from "./bounces";
 
 const IMAP_CONNECT_TIMEOUT_MS = 20_000;
 const IMAP_OPERATION_TIMEOUT_MS = 15_000;
 const MAX_MESSAGES_PER_RUN = 15;
 const IMAP_SEARCH_SINCE_DAYS = 30;
+
+const BOUNCEABLE_STATUSES = ["sent", "opened", "clicked"] as const;
+
+export interface InboundCheckResult {
+  replies: number;
+  bounces: number;
+}
 
 function withTimeout<T>(
   promise: Promise<T>,
@@ -27,7 +35,6 @@ function withTimeout<T>(
 
 function closeImap(imap: Imap): void {
   try {
-    // destroy() closes immediately; end() can hang waiting for LOGOUT.
     imap.destroy();
   } catch {
     // Connection may already be closed.
@@ -108,7 +115,6 @@ function connectImap(config: {
       connTimeout: IMAP_CONNECT_TIMEOUT_MS,
       authTimeout: IMAP_CONNECT_TIMEOUT_MS,
       tlsOptions: { rejectUnauthorized: false },
-      // socketTimeout exists at runtime but is missing from @types/imap
       socketTimeout: IMAP_OPERATION_TIMEOUT_MS,
     } as Imap.Config);
 
@@ -154,14 +160,90 @@ async function runImapOp<T>(
   }
 }
 
-export async function checkForReplies(): Promise<number> {
+async function applyBounce(recipient: string, reason: string, bounceType: string) {
+  const email = recipient.toLowerCase();
+
+  const log = await prisma.emailLog.findFirst({
+    where: {
+      contact: { email },
+      status: { in: [...BOUNCEABLE_STATUSES] },
+    },
+    orderBy: { sentAt: "desc" },
+  });
+
+  if (!log) {
+    console.warn(`[bounces] Bounce detected for ${email} but no matching EmailLog found`);
+    return false;
+  }
+
+  await prisma.emailLog.update({
+    where: { id: log.id },
+    data: {
+      status: "bounced",
+      bounceReason: reason,
+      bounceType,
+      bouncedAt: new Date(),
+    },
+  });
+
+  console.log(
+    `[bounces] Bounce detected — recipient: ${email}, reason: ${reason}, type: ${bounceType}, EmailLog: ${log.id}`
+  );
+  return true;
+}
+
+async function applyReply(parsed: Awaited<ReturnType<typeof simpleParser>>) {
+  const inReplyTo = parsed.inReplyTo || "";
+  const references = parsed.references
+    ? Array.isArray(parsed.references)
+      ? parsed.references.join(" ")
+      : String(parsed.references)
+    : "";
+  const fromEmail = parsed.from?.value?.[0]?.address?.toLowerCase() || "";
+
+  const searchIds = `${inReplyTo} ${references}`;
+  const trackingMatch = searchIds.match(/<([a-z0-9]+)@/i);
+  const trackingId = trackingMatch?.[1];
+
+  let log = trackingId
+    ? await prisma.emailLog.findUnique({ where: { trackingId } })
+    : null;
+
+  if (!log && fromEmail) {
+    const contact = await prisma.contact.findFirst({
+      where: { email: fromEmail },
+    });
+    if (contact) {
+      log = await prisma.emailLog.findFirst({
+        where: {
+          contactId: contact.id,
+          status: { notIn: ["replied", "bounced"] },
+        },
+        orderBy: { sentAt: "desc" },
+      });
+    }
+  }
+
+  if (!log || log.status === "replied" || log.status === "bounced") {
+    return false;
+  }
+
+  await prisma.emailLog.update({
+    where: { id: log.id },
+    data: { status: "replied", repliedAt: new Date() },
+  });
+  return true;
+}
+
+export async function checkForReplies(): Promise<InboundCheckResult> {
   const settings = await prisma.settings.findUnique({ where: { id: "default" } });
   if (!settings?.imapHost || !settings.imapUser || !settings.imapPass) {
-    return 0;
+    return { replies: 0, bounces: 0 };
   }
 
   let imap: Imap | null = null;
-  let matched = 0;
+  let replies = 0;
+  let bounces = 0;
 
   try {
     imap = await connectImap({
@@ -189,41 +271,30 @@ export async function checkForReplies(): Promise<number> {
         fetchMessage(imap!, uid)
       );
       const parsed = await simpleParser(raw);
+      let handled = false;
 
-      const inReplyTo = parsed.inReplyTo || "";
-      const references = parsed.references
-        ? Array.isArray(parsed.references)
-          ? parsed.references.join(" ")
-          : String(parsed.references)
-        : "";
-      const fromEmail = parsed.from?.value?.[0]?.address?.toLowerCase() || "";
-
-      const searchIds = `${inReplyTo} ${references}`;
-      const trackingMatch = searchIds.match(/<([a-z0-9]+)@/i);
-      const trackingId = trackingMatch?.[1];
-
-      let log = trackingId
-        ? await prisma.emailLog.findUnique({ where: { trackingId } })
-        : null;
-
-      if (!log && fromEmail) {
-        const contact = await prisma.contact.findFirst({
-          where: { email: fromEmail },
-        });
-        if (contact) {
-          log = await prisma.emailLog.findFirst({
-            where: { contactId: contact.id, status: { not: "replied" } },
-            orderBy: { sentAt: "desc" },
-          });
+      const bounce = parseBounceEmail(mailFromParsed(parsed));
+      if (bounce.isBounce) {
+        if (bounce.recipient && bounce.bounceType && bounce.reason) {
+          const updated = await applyBounce(
+            bounce.recipient,
+            bounce.reason,
+            bounce.bounceType
+          );
+          if (updated) bounces++;
+        } else {
+          console.warn(
+            `[bounces] Bounce-like message could not be parsed fully (uid ${uid})`
+          );
         }
+        handled = true;
+      } else {
+        const replied = await applyReply(parsed);
+        if (replied) replies++;
+        handled = replied;
       }
 
-      if (log && log.status !== "replied") {
-        await prisma.emailLog.update({
-          where: { id: log.id },
-          data: { status: "replied", repliedAt: new Date() },
-        });
-        matched++;
+      if (handled) {
         await runImapOp(imap, `Marking IMAP message ${uid} as seen`, () =>
           markSeen(imap!, uid)
         );
@@ -237,5 +308,5 @@ export async function checkForReplies(): Promise<number> {
     if (imap) closeImap(imap);
   }
 
-  return matched;
+  return { replies, bounces };
 }

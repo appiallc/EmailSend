@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 
 export async function GET() {
-  const [contacts, campaigns, logs, settings] = await Promise.all([
-    prisma.contact.count(),
+  const [contactLists, campaigns, logs, settings] = await Promise.all([
+    prisma.contactList.count(),
     prisma.campaign.count(),
     prisma.emailLog.groupBy({
       by: ["status"],
@@ -30,7 +30,8 @@ export async function GET() {
   const smtpConfigured = !!(settings?.smtpHost && settings?.smtpUser);
 
   return NextResponse.json({
-    contacts,
+    contactLists,
+    contacts: await prisma.contact.count(),
     campaigns,
     statusCounts,
     smtpConfigured,

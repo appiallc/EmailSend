@@ -13,7 +13,8 @@ export async function GET(request: NextRequest) {
 
   return NextResponse.json({
     ok: !result.error,
-    replies: result.count,
+    replies: result.replies,
+    bounces: result.bounces,
     error: result.error,
     ranAt: new Date().toISOString(),
   });

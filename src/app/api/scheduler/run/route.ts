@@ -8,7 +8,8 @@ export async function POST() {
   ]);
 
   return NextResponse.json({
-    replies: replyResult.count,
+    replies: replyResult.replies,
+    bounces: replyResult.bounces,
     followUps: followUpResult.count,
     errors: [replyResult.error, followUpResult.error].filter(Boolean),
   });

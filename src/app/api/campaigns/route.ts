@@ -6,18 +6,30 @@ import {
   DEFAULT_INITIAL_BODY,
   DEFAULT_INITIAL_SUBJECT,
 } from "@/lib/templates";
+import { syncCampaignContactLists } from "@/lib/contact-lists";
 
 export async function GET() {
   const campaigns = await prisma.campaign.findMany({
     orderBy: { createdAt: "desc" },
     include: {
+      contactLists: { include: { contactList: true } },
       emailLogs: {
         include: { contact: true },
         orderBy: { sentAt: "desc" },
       },
     },
   });
-  return NextResponse.json(campaigns);
+
+  return NextResponse.json(
+    campaigns.map((c) => ({
+      ...c,
+      contactListIds: c.contactLists.map((cl) => cl.contactListId),
+      contactLists: c.contactLists.map((cl) => ({
+        id: cl.contactList.id,
+        name: cl.contactList.name,
+      })),
+    }))
+  );
 }
 
 export async function POST(request: NextRequest) {
@@ -34,7 +46,24 @@ export async function POST(request: NextRequest) {
     },
   });
 
-  return NextResponse.json(campaign);
+  if (body.contactListIds?.length) {
+    await syncCampaignContactLists(campaign.id, body.contactListIds);
+  }
+
+  const full = await prisma.campaign.findUnique({
+    where: { id: campaign.id },
+    include: { contactLists: { include: { contactList: true } } },
+  });
+
+  return NextResponse.json({
+    ...full,
+    contactListIds: full?.contactLists.map((cl) => cl.contactListId) ?? [],
+    contactLists:
+      full?.contactLists.map((cl) => ({
+        id: cl.contactList.id,
+        name: cl.contactList.name,
+      })) ?? [],
+  });
 }
 
 export async function PATCH(request: NextRequest) {
@@ -64,7 +93,25 @@ export async function PATCH(request: NextRequest) {
     where: { id },
     data,
   });
-  return NextResponse.json(campaign);
+
+  if (body.contactListIds !== undefined) {
+    await syncCampaignContactLists(id, body.contactListIds);
+  }
+
+  const full = await prisma.campaign.findUnique({
+    where: { id: campaign.id },
+    include: { contactLists: { include: { contactList: true } } },
+  });
+
+  return NextResponse.json({
+    ...full,
+    contactListIds: full?.contactLists.map((cl) => cl.contactListId) ?? [],
+    contactLists:
+      full?.contactLists.map((cl) => ({
+        id: cl.contactList.id,
+        name: cl.contactList.name,
+      })) ?? [],
+  });
 }
 
 export async function DELETE(request: NextRequest) {

@@ -6,6 +6,7 @@ import { Loader } from "@/components/Loader";
 import Link from "next/link";
 
 interface Stats {
+  contactLists: number;
   contacts: number;
   campaigns: number;
   statusCounts: Record<string, number>;
@@ -61,7 +62,7 @@ export default function DashboardPage() {
       )}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-        <StatCard label="Contacts" value={stats.contacts} accent="blue" />
+        <StatCard label="Contact Lists" value={stats.contactLists ?? 0} accent="blue" />
         <StatCard label="Campaigns" value={stats.campaigns} accent="purple" />
         <StatCard
           label="Emails Sent"
@@ -137,12 +138,12 @@ export default function DashboardPage() {
 
       <div className="mt-8 grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
         <div className="bg-white rounded-xl border p-5">
-          <h3 className="font-semibold mb-2">1. Import contacts</h3>
+          <h3 className="font-semibold mb-2">1. Create contact lists</h3>
           <p className="text-slate-500">
-            Upload a CSV with email, first_name, last_name, company, and more.
+            Create named lists and upload a CSV for each group of leads.
           </p>
           <Link href="/contacts" className="text-blue-600 mt-2 inline-block hover:underline">
-            Import CSV →
+            Manage lists →
           </Link>
         </div>
         <div className="bg-white rounded-xl border p-5">

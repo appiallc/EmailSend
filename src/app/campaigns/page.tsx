@@ -15,6 +15,9 @@ interface EmailLog {
   status: string;
   sentAt: string | null;
   openedAt: string | null;
+  bouncedAt: string | null;
+  bounceReason: string | null;
+  bounceType: string | null;
   repliedAt: string | null;
   contact: {
     email: string;
@@ -22,6 +25,12 @@ interface EmailLog {
     lastName: string;
     company: string;
   };
+}
+
+interface ContactList {
+  id: string;
+  name: string;
+  contactCount: number;
 }
 
 interface Campaign {
@@ -33,24 +42,90 @@ interface Campaign {
   followUpBodyHtml: string;
   followUpDays: number;
   status: string;
+  contactListIds: string[];
+  contactLists: { id: string; name: string }[];
   emailLogs: EmailLog[];
+}
+
+function ContactListPicker({
+  lists,
+  selected,
+  onChange,
+}: {
+  lists: ContactList[];
+  selected: string[];
+  onChange: (ids: string[]) => void;
+}) {
+  if (lists.length === 0) {
+    return (
+      <p className="text-xs text-amber-700">
+        No contact lists yet.{" "}
+        <a href="/contacts" className="underline">
+          Create one first
+        </a>
+        .
+      </p>
+    );
+  }
+
+  const toggle = (id: string) => {
+    if (selected.includes(id)) {
+      onChange(selected.filter((x) => x !== id));
+    } else {
+      onChange([...selected, id]);
+    }
+  };
+
+  return (
+    <div className="flex flex-wrap gap-2">
+      {lists.map((list) => {
+        const active = selected.includes(list.id);
+        return (
+          <button
+            key={list.id}
+            type="button"
+            onClick={() => toggle(list.id)}
+            className={`px-3 py-1.5 text-xs rounded-lg border transition-colors ${
+              active
+                ? "bg-blue-600 text-white border-blue-600"
+                : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"
+            }`}
+          >
+            {list.name} ({list.contactCount})
+          </button>
+        );
+      })}
+    </div>
+  );
 }
 
 export default function CampaignsPage() {
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
+  const [contactLists, setContactLists] = useState<ContactList[]>([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<Campaign | null>(null);
   const [sendingId, setSendingId] = useState<string | null>(null);
   const [message, setMessage] = useState("");
   const [viewing, setViewing] = useState<Campaign | null>(null);
+  const [sendSelections, setSendSelections] = useState<Record<string, string[]>>({});
 
-  const load = () => {
-    fetch("/api/campaigns")
-      .then((r) => r.json())
-      .then((data) => {
-        setCampaigns(data);
-        setLoading(false);
-      });
+  const load = async () => {
+    const [campaignData, listData] = await Promise.all([
+      fetch("/api/campaigns").then((r) => r.json()),
+      fetch("/api/contact-lists").then((r) => r.json()),
+    ]);
+    setCampaigns(campaignData);
+    setContactLists(listData);
+    setSendSelections((prev) => {
+      const next = { ...prev };
+      for (const c of campaignData as Campaign[]) {
+        if (!next[c.id]?.length && c.contactListIds?.length) {
+          next[c.id] = c.contactListIds;
+        }
+      }
+      return next;
+    });
+    setLoading(false);
   };
 
   useEffect(() => {
@@ -68,6 +143,7 @@ export default function CampaignsPage() {
         followUpSubject: DEFAULT_FOLLOWUP_SUBJECT,
         followUpBodyHtml: DEFAULT_FOLLOWUP_BODY,
         followUpDays: 7,
+        contactListIds: [],
       }),
     });
     const campaign = await res.json();
@@ -80,28 +156,53 @@ export default function CampaignsPage() {
     await fetch("/api/campaigns", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(editing),
+      body: JSON.stringify({
+        id: editing.id,
+        name: editing.name,
+        subject: editing.subject,
+        bodyHtml: editing.bodyHtml,
+        followUpSubject: editing.followUpSubject,
+        followUpBodyHtml: editing.followUpBodyHtml,
+        followUpDays: editing.followUpDays,
+        contactListIds: editing.contactListIds,
+      }),
     });
     setMessage("Campaign saved.");
     setEditing(null);
     load();
   };
 
-  const sendCampaign = async (id: string) => {
-    if (!confirm("Send this campaign to ALL contacts? This cannot be undone.")) return;
+  const sendCampaign = async (id: string, sendToAll: boolean) => {
+    const selected = sendSelections[id] ?? [];
+    const label = sendToAll
+      ? "ALL contacts in ALL lists (duplicates allowed)"
+      : `selected list(s): ${selected.length ? selected.map((lid) => contactLists.find((l) => l.id === lid)?.name).join(", ") : "none"}`;
+
+    if (!sendToAll && selected.length === 0) {
+      setMessage("Error: Select at least one contact list, or use Send to All.");
+      return;
+    }
+
+    if (!confirm(`Send this campaign to ${label}? This cannot be undone.`)) return;
+
     setSendingId(id);
     setMessage("");
     try {
       const res = await fetch("/api/campaigns/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ campaignId: id, action: "send" }),
+        body: JSON.stringify({
+          campaignId: id,
+          action: "send",
+          sendToAll,
+          contactListIds: sendToAll ? undefined : selected,
+        }),
       });
       const data = await res.json();
       if (data.error) {
         setMessage(`Error: ${data.error}`);
       } else {
-        setMessage(`Sent ${data.sent} email(s). ${data.failed} failed.`);
+        setMessage(`Sent ${data.sent} email(s) to ${data.recipients} recipient(s). ${data.failed} failed.`);
       }
       load();
     } finally {
@@ -148,6 +249,7 @@ export default function CampaignsPage() {
       opened: "bg-purple-100 text-purple-700",
       clicked: "bg-indigo-100 text-indigo-700",
       replied: "bg-green-100 text-green-700",
+      bounced: "bg-orange-100 text-orange-700",
       failed: "bg-red-100 text-red-700",
     };
     return (
@@ -190,6 +292,19 @@ export default function CampaignsPage() {
                 className="w-full border rounded-lg px-3 py-2 text-sm"
                 value={editing.name}
                 onChange={(e) => setEditing({ ...editing, name: e.target.value })}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">
+                Default Contact Lists
+              </label>
+              <p className="text-xs text-slate-400 mb-2">
+                Pre-selected when sending. You can override on each campaign card.
+              </p>
+              <ContactListPicker
+                lists={contactLists}
+                selected={editing.contactListIds ?? []}
+                onChange={(ids) => setEditing({ ...editing, contactListIds: ids })}
               />
             </div>
             <div>
@@ -283,6 +398,7 @@ export default function CampaignsPage() {
                 <th className="px-4 py-3">Status</th>
                 <th className="px-4 py-3">Sent</th>
                 <th className="px-4 py-3">Opened</th>
+                <th className="px-4 py-3">Bounced</th>
                 <th className="px-4 py-3">Actions</th>
               </tr>
             </thead>
@@ -304,7 +420,21 @@ export default function CampaignsPage() {
                     {log.openedAt ? new Date(log.openedAt).toLocaleString() : "—"}
                   </td>
                   <td className="px-4 py-3">
-                    {log.status !== "replied" && (
+                    {log.bouncedAt ? (
+                      <div>
+                        <div>{new Date(log.bouncedAt).toLocaleString()}</div>
+                        {log.bounceReason && (
+                          <div className="text-xs text-slate-400 mt-0.5 max-w-xs truncate" title={log.bounceReason}>
+                            {log.bounceType}: {log.bounceReason}
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      "—"
+                    )}
+                  </td>
+                  <td className="px-4 py-3">
+                    {log.status !== "replied" && log.status !== "bounced" && (
                       <button
                         onClick={() => markReplied(log.id)}
                         className="text-xs text-green-600 hover:underline"
@@ -335,8 +465,8 @@ export default function CampaignsPage() {
         ) : (
           campaigns.map((c) => (
             <div key={c.id} className="bg-white rounded-xl border p-5 shadow-sm">
-              <div className="flex items-start justify-between">
-                <div>
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex-1 min-w-0">
                   <h3 className="font-semibold">{c.name}</h3>
                   <p className="text-sm text-slate-500 mt-1">{c.subject}</p>
                   <div className="flex gap-3 mt-2 text-xs text-slate-400">
@@ -346,8 +476,18 @@ export default function CampaignsPage() {
                     <span>•</span>
                     <span className="capitalize">{c.status}</span>
                   </div>
+                  <div className="mt-4">
+                    <p className="text-xs font-medium text-slate-600 mb-2">Send to lists:</p>
+                    <ContactListPicker
+                      lists={contactLists}
+                      selected={sendSelections[c.id] ?? c.contactListIds ?? []}
+                      onChange={(ids) =>
+                        setSendSelections((prev) => ({ ...prev, [c.id]: ids }))
+                      }
+                    />
+                  </div>
                 </div>
-                <div className="flex gap-2">
+                <div className="flex flex-col gap-2 shrink-0">
                   <button
                     onClick={() => setViewing(c)}
                     className="px-3 py-1.5 text-xs border rounded-lg hover:bg-slate-50"
@@ -367,11 +507,18 @@ export default function CampaignsPage() {
                     Delete
                   </button>
                   <button
-                    onClick={() => sendCampaign(c.id)}
+                    onClick={() => sendCampaign(c.id, false)}
                     disabled={sendingId !== null || c.status === "sending"}
                     className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded-lg disabled:opacity-50"
                   >
-                    {sendingId === c.id ? "Sending..." : "Send to All"}
+                    {sendingId === c.id ? "Sending..." : "Send to Selected"}
+                  </button>
+                  <button
+                    onClick={() => sendCampaign(c.id, true)}
+                    disabled={sendingId !== null || c.status === "sending"}
+                    className="px-3 py-1.5 text-xs border border-blue-200 text-blue-700 rounded-lg hover:bg-blue-50 disabled:opacity-50"
+                  >
+                    Send to All
                   </button>
                 </div>
               </div>

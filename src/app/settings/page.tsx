@@ -57,7 +57,7 @@ export default function SettingsPage() {
         return;
       }
 
-      let msg = `Scheduler run complete: ${data.replies} reply(ies) detected, ${data.followUps} follow-up(s) sent.`;
+      let msg = `Scheduler run complete: ${data.replies} reply(ies), ${data.bounces ?? 0} bounce(s), ${data.followUps} follow-up(s) sent.`;
       if (data.errors?.length) {
         msg += ` Issues: ${data.errors.join("; ")}`;
       }

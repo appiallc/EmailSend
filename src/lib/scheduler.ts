@@ -15,8 +15,11 @@ export function startScheduler() {
 
   cron.schedule("*/15 * * * *", async () => {
     const result = await runReplyCheck();
-    if (result.count > 0) {
-      console.log(`[scheduler] Marked ${result.count} email(s) as replied`);
+    if (result.replies > 0) {
+      console.log(`[scheduler] Marked ${result.replies} email(s) as replied`);
+    }
+    if (result.bounces > 0) {
+      console.log(`[scheduler] Marked ${result.bounces} email(s) as bounced`);
     }
   });
 

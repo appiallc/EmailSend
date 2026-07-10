@@ -8,31 +8,54 @@ datasource db {
   directUrl = env("DIRECT_URL")
 }
 
+model ContactList {
+  id        String                @id @default(cuid())
+  name      String
+  createdAt DateTime              @default(now())
+  contacts  Contact[]
+  campaigns CampaignContactList[]
+}
+
 model Contact {
-  id        String     @id @default(cuid())
-  email     String     @unique
-  firstName String     @default("")
-  lastName  String     @default("")
-  company   String     @default("")
-  title     String     @default("")
-  phone     String     @default("")
-  notes     String     @default("")
-  createdAt DateTime   @default(now())
-  emailLogs EmailLog[]
+  id            String      @id @default(cuid())
+  contactListId String
+  email         String
+  firstName     String      @default("")
+  lastName      String      @default("")
+  company       String      @default("")
+  title         String      @default("")
+  phone         String      @default("")
+  notes         String      @default("")
+  createdAt     DateTime    @default(now())
+  contactList   ContactList @relation(fields: [contactListId], references: [id], onDelete: Cascade)
+  emailLogs     EmailLog[]
+
+  @@unique([contactListId, email])
+  @@index([contactListId])
 }
 
 model Campaign {
-  id               String     @id @default(cuid())
+  id               String                @id @default(cuid())
   name             String
   subject          String
   bodyHtml         String
-  followUpSubject  String     @default("")
-  followUpBodyHtml String     @default("")
-  followUpDays     Int        @default(7)
-  status           String     @default("draft") // draft | sending | sent | paused
-  createdAt        DateTime   @default(now())
+  followUpSubject  String                @default("")
+  followUpBodyHtml String                @default("")
+  followUpDays     Int                   @default(7)
+  status           String                @default("draft") // draft | sending | sent | paused
+  createdAt        DateTime              @default(now())
   sentAt           DateTime?
   emailLogs        EmailLog[]
+  contactLists     CampaignContactList[]
+}
+
+model CampaignContactList {
+  campaignId    String
+  contactListId String
+  campaign      Campaign    @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  contactList   ContactList @relation(fields: [contactListId], references: [id], onDelete: Cascade)
+
+  @@id([campaignId, contactListId])
 }
 
 model EmailLog {
@@ -40,15 +63,18 @@ model EmailLog {
   campaignId  String
   contactId   String
   type        String    // initial | followup
-  status      String    @default("pending") // pending | sent | failed | opened | clicked | replied
-  trackingId  String    @unique @default(cuid())
-  messageId   String?
-  error       String?
-  sentAt      DateTime?
-  openedAt    DateTime?
-  clickedAt   DateTime?
-  repliedAt   DateTime?
-  followUpDue DateTime?
+  status       String    @default("pending") // pending | sent | failed | opened | clicked | replied | bounced
+  trackingId   String    @unique @default(cuid())
+  messageId    String?
+  error        String?
+  sentAt       DateTime?
+  openedAt     DateTime?
+  clickedAt    DateTime?
+  repliedAt    DateTime?
+  bouncedAt    DateTime?
+  bounceReason String?
+  bounceType   String?   // HARD_BOUNCE | SOFT_BOUNCE
+  followUpDue  DateTime?
   campaign    Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
   contact     Contact   @relation(fields: [contactId], references: [id], onDelete: Cascade)
 
@@ -58,17 +84,17 @@ model EmailLog {
 }
 
 model Settings {
-  id          String @id @default("default")
-  companyName String @default("Your Company")
-  smtpHost    String @default("")
-  smtpPort    Int    @default(587)
+  id          String  @id @default("default")
+  companyName String  @default("Your Company")
+  smtpHost    String  @default("")
+  smtpPort    Int     @default(587)
   smtpSecure  Boolean @default(false)
-  smtpUser    String @default("")
-  smtpPass    String @default("")
-  smtpFrom    String @default("")
-  imapHost    String @default("")
-  imapPort    Int    @default(993)
-  imapUser    String @default("")
-  imapPass    String @default("")
-  baseUrl     String @default("http://localhost:3000")
+  smtpUser    String  @default("")
+  smtpPass    String  @default("")
+  smtpFrom    String  @default("")
+  imapHost    String  @default("")
+  imapPort    Int     @default(993)
+  imapUser    String  @default("")
+  imapPass    String  @default("")
+  baseUrl     String  @default("http://localhost:3000")
 }
