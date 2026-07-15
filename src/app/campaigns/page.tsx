@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import useSWR, { mutate as globalMutate } from "swr";
 import {
   DEFAULT_FOLLOWUP_BODY,
   DEFAULT_FOLLOWUP_SUBJECT,
@@ -8,6 +9,7 @@ import {
   DEFAULT_INITIAL_SUBJECT,
 } from "@/lib/templates";
 import { Loader } from "@/components/Loader";
+import { API } from "@/lib/swr";
 
 interface EmailLog {
   id: string;
@@ -100,40 +102,45 @@ function ContactListPicker({
 }
 
 export default function CampaignsPage() {
-  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
-  const [contactLists, setContactLists] = useState<ContactList[]>([]);
-  const [loading, setLoading] = useState(true);
+  const {
+    data: campaigns,
+    isLoading: campaignsLoading,
+    mutate: mutateCampaigns,
+  } = useSWR<Campaign[]>(API.campaigns);
+  const { data: contactLists } = useSWR<ContactList[]>(API.contactLists);
   const [editing, setEditing] = useState<Campaign | null>(null);
   const [sendingId, setSendingId] = useState<string | null>(null);
   const [message, setMessage] = useState("");
   const [viewing, setViewing] = useState<Campaign | null>(null);
   const [sendSelections, setSendSelections] = useState<Record<string, string[]>>({});
 
-  const load = async () => {
-    const [campaignData, listData] = await Promise.all([
-      fetch("/api/campaigns").then((r) => r.json()),
-      fetch("/api/contact-lists").then((r) => r.json()),
-    ]);
-    setCampaigns(campaignData);
-    setContactLists(listData);
+  const lists = contactLists ?? [];
+  const campaignList = campaigns ?? [];
+  const loading = campaignsLoading && !campaigns;
+
+  useEffect(() => {
+    if (!campaigns) return;
     setSendSelections((prev) => {
       const next = { ...prev };
-      for (const c of campaignData as Campaign[]) {
+      for (const c of campaigns) {
         if (!next[c.id]?.length && c.contactListIds?.length) {
           next[c.id] = c.contactListIds;
         }
       }
       return next;
     });
-    setLoading(false);
+  }, [campaigns]);
+
+  const refreshCampaigns = async () => {
+    const updated = await mutateCampaigns();
+    if (viewing && updated) {
+      const c = updated.find((x) => x.id === viewing.id);
+      if (c) setViewing(c);
+    }
   };
 
-  useEffect(() => {
-    load();
-  }, []);
-
   const createCampaign = async () => {
-    const res = await fetch("/api/campaigns", {
+    const res = await fetch(API.campaigns, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -148,12 +155,12 @@ export default function CampaignsPage() {
     });
     const campaign = await res.json();
     setEditing(campaign);
-    load();
+    await mutateCampaigns();
   };
 
   const saveCampaign = async () => {
     if (!editing) return;
-    await fetch("/api/campaigns", {
+    await fetch(API.campaigns, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -169,14 +176,14 @@ export default function CampaignsPage() {
     });
     setMessage("Campaign saved.");
     setEditing(null);
-    load();
+    await mutateCampaigns();
   };
 
   const sendCampaign = async (id: string, sendToAll: boolean) => {
     const selected = sendSelections[id] ?? [];
     const label = sendToAll
       ? "ALL contacts in ALL lists (duplicates allowed)"
-      : `selected list(s): ${selected.length ? selected.map((lid) => contactLists.find((l) => l.id === lid)?.name).join(", ") : "none"}`;
+      : `selected list(s): ${selected.length ? selected.map((lid) => lists.find((l) => l.id === lid)?.name).join(", ") : "none"}`;
 
     if (!sendToAll && selected.length === 0) {
       setMessage("Error: Select at least one contact list, or use Send to All.");
@@ -204,7 +211,7 @@ export default function CampaignsPage() {
       } else {
         setMessage(`Sent ${data.sent} email(s) to ${data.recipients} recipient(s). ${data.failed} failed.`);
       }
-      load();
+      await Promise.all([refreshCampaigns(), globalMutate(API.stats)]);
     } finally {
       setSendingId(null);
     }
@@ -212,7 +219,7 @@ export default function CampaignsPage() {
 
   const deleteCampaign = async (id: string) => {
     if (!confirm("Delete this campaign and all of its email logs? This cannot be undone.")) return;
-    const res = await fetch(`/api/campaigns?id=${encodeURIComponent(id)}`, {
+    const res = await fetch(`${API.campaigns}?id=${encodeURIComponent(id)}`, {
       method: "DELETE",
     });
     const data = await res.json();
@@ -225,7 +232,7 @@ export default function CampaignsPage() {
     setMessage("Campaign deleted.");
     if (editing?.id === id) setEditing(null);
     if (viewing?.id === id) setViewing(null);
-    load();
+    await Promise.all([mutateCampaigns(), globalMutate(API.stats)]);
   };
 
   const markReplied = async (logId: string) => {
@@ -234,12 +241,7 @@ export default function CampaignsPage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id: logId, status: "replied" }),
     });
-    load();
-    if (viewing) {
-      const updated = await fetch("/api/campaigns").then((r) => r.json());
-      const c = updated.find((x: Campaign) => x.id === viewing.id);
-      if (c) setViewing(c);
-    }
+    await Promise.all([refreshCampaigns(), globalMutate(API.stats)]);
   };
 
   const statusBadge = (status: string) => {
@@ -302,7 +304,7 @@ export default function CampaignsPage() {
                 Pre-selected when sending. You can override on each campaign card.
               </p>
               <ContactListPicker
-                lists={contactLists}
+                lists={lists}
                 selected={editing.contactListIds ?? []}
                 onChange={(ids) => setEditing({ ...editing, contactListIds: ids })}
               />
@@ -455,7 +457,7 @@ export default function CampaignsPage() {
           <div className="bg-white rounded-xl border shadow-sm min-h-[320px] flex items-center justify-center">
             <Loader />
           </div>
-        ) : campaigns.length === 0 ? (
+        ) : campaignList.length === 0 ? (
           <div className="bg-white rounded-xl border p-12 text-center">
             <p className="text-slate-500 mb-4">No campaigns yet.</p>
             <button onClick={createCampaign} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg">
@@ -463,7 +465,7 @@ export default function CampaignsPage() {
             </button>
           </div>
         ) : (
-          campaigns.map((c) => (
+          campaignList.map((c) => (
             <div key={c.id} className="bg-white rounded-xl border p-5 shadow-sm">
               <div className="flex items-start justify-between gap-4">
                 <div className="flex-1 min-w-0">
@@ -479,7 +481,7 @@ export default function CampaignsPage() {
                   <div className="mt-4">
                     <p className="text-xs font-medium text-slate-600 mb-2">Send to lists:</p>
                     <ContactListPicker
-                      lists={contactLists}
+                      lists={lists}
                       selected={sendSelections[c.id] ?? c.contactListIds ?? []}
                       onChange={(ids) =>
                         setSendSelections((prev) => ({ ...prev, [c.id]: ids }))

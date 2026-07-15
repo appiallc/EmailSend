@@ -58,7 +58,26 @@ export async function PATCH(request: NextRequest) {
   }
 
   if (body.csv) {
-    await importContactsToList(id, body.csv, true);
+    const replace = body.replace !== false;
+    const result = await importContactsToList(id, body.csv, replace);
+    const list = await prisma.contactList.findUnique({
+      where: { id },
+      include: { _count: { select: { contacts: true } } },
+    });
+
+    if (!list) {
+      return NextResponse.json({ error: "List not found" }, { status: 404 });
+    }
+
+    return NextResponse.json({
+      id: list.id,
+      name: list.name,
+      createdAt: list.createdAt,
+      contactCount: list._count.contacts,
+      imported: result.imported,
+      errors: result.errors,
+      replaced: replace,
+    });
   }
 
   const list = await prisma.contactList.findUnique({

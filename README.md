@@ -11,19 +11,33 @@ Email outreach webapp for any business — import contacts from CSV, send person
 - **Reply detection** via IMAP or manual marking
 - **Campaign dashboard** with send/open/reply stats
 
+## Authentication (Google)
+
+MailTrack requires Google sign-in. Only emails listed in `ALLOWED_EMAILS` can access the app.
+
+1. Copy [`.env.example`](.env.example) values into `.env` / Vercel env vars.
+2. Create a Google OAuth **Web** client (see comments in `.env.example`).
+3. Set:
+   - `AUTH_SECRET` — random 32+ char secret (`openssl rand -base64 32`)
+   - `AUTH_GOOGLE_ID` / `AUTH_GOOGLE_SECRET` — from Google Cloud Console
+   - `ALLOWED_EMAILS` — comma-separated Google emails
+4. Run `npm run dev` and open `/login`.
+
+Public (no Google login): `/api/track/*` (tracking pixels), `/api/cron/*` (uses `CRON_SECRET`), `/api/auth/*`.
+
 ## Quick Start
 
 ```bash
 npm install
-npx prisma migrate dev
+npx prisma db push
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000).
+Open [http://localhost:3000](http://localhost:3000) — you will be redirected to **Sign in with Google**.
 
 1. Go to **Settings** and configure SMTP (required to send).
-2. Go to **Contacts** and upload your CSV (see `sample-contacts.csv`).
-3. Go to **Campaigns**, create a campaign, edit templates, and click **Send to All**.
+2. Go to **Contacts** and create a contact list from CSV.
+3. Go to **Campaigns**, create a campaign, select lists, and send.
 
 ## CSV Format
 

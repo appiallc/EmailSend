@@ -18,12 +18,14 @@
     "imap": "^0.8.19",
     "mailparser": "^3.9.12",
     "next": "16.2.9",
+    "next-auth": "^5.0.0-beta.31",
     "node-cron": "^4.5.0",
     "nodemailer": "^9.0.3",
     "papaparse": "^5.5.4",
     "prisma": "^6.19.3",
     "react": "19.2.4",
     "react-dom": "19.2.4",
+    "swr": "^2.4.2",
     "uuid": "^14.0.1"
   },
   "devDependencies": {

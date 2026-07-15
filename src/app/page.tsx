@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import useSWR from "swr";
 import { StatCard } from "@/components/StatCard";
 import { Loader } from "@/components/Loader";
+import { API } from "@/lib/swr";
 import Link from "next/link";
 
 interface Stats {
@@ -23,16 +24,18 @@ interface Stats {
 }
 
 export default function DashboardPage() {
-  const [stats, setStats] = useState<Stats | null>(null);
+  const { data: stats, isLoading } = useSWR<Stats>(API.stats);
 
-  useEffect(() => {
-    fetch("/api/stats")
-      .then((r) => r.json())
-      .then(setStats);
-  }, []);
+  if (isLoading && !stats) {
+    return <Loader fullPage />;
+  }
 
   if (!stats) {
-    return <Loader fullPage />;
+    return (
+      <div className="p-8">
+        <p className="text-slate-500">Could not load dashboard.</p>
+      </div>
+    );
   }
 
   const totalSent = stats.statusCounts.sent || 0;

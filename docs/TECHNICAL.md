@@ -699,38 +699,38 @@ CMD ["npm", "start"]
 
 | Area | Current state | Recommendation |
 |------|--------------|----------------|
-| Authentication | **None** — all routes are public | Add auth (NextAuth, Clerk, etc.) before production use |
-| SMTP/IMAP passwords | Stored in SQLite plaintext | Encrypt at rest or use env vars + secrets manager |
-| API endpoints | No rate limiting | Add rate limits on send and import endpoints |
+| Authentication | **Google OAuth (Auth.js)** + `ALLOWED_EMAILS` allowlist | Keep allowlist updated; set `AUTH_*` secrets in Vercel |
+| SMTP/IMAP passwords | Stored in Postgres plaintext | Encrypt at rest (Phase 2) or use secrets manager |
+| API endpoints | Auth required except track/cron/auth | Add rate limits on send and import endpoints |
 | Tracking endpoints | Public, no auth | Acceptable for pixels/redirects; consider signed URLs |
+| Cron endpoints | Bearer `CRON_SECRET` | Rotate secret periodically |
 | CSV upload | No file size limit | Add max file size validation |
 | IMAP TLS | `rejectUnauthorized: false` | Use proper CA certificates in production |
 
-**Do not expose this application to the public internet without authentication.**
+**Sign-in:** Google only. Non-allowlisted accounts are rejected (`AccessDenied` → `/login`).
+
+**Public routes:** `/api/auth/*`, `/api/track/*`, `/api/cron/*` (token), `/login`.
 
 ---
 
 ## Known Limitations
 
-1. **No authentication** — anyone with URL access can send emails and view data.
+1. **Single settings profile** — one SMTP/IMAP account for the entire app (shared after login).
 2. **Synchronous sending** — emails are sent sequentially in the request handler; large lists may timeout.
-3. **Single settings profile** — one SMTP/IMAP account for the entire app.
-4. **SQLite** — not ideal for concurrent writes or large datasets.
-5. **Open tracking accuracy** — blocked by privacy features in modern email clients.
-6. **No unsubscribe** — CAN-SPAM / GDPR compliance requires an unsubscribe mechanism for production outreach.
-7. **No bounce handling** — failed deliveries after SMTP accept are not tracked.
-8. **Scheduler tied to process** — no external job queue (Redis, Bull, etc.).
+3. **Open tracking accuracy** — blocked by privacy features in modern email clients.
+4. **No unsubscribe** — CAN-SPAM / GDPR compliance requires an unsubscribe mechanism for production outreach.
+5. **Credentials at rest** — SMTP/IMAP passwords are not encrypted in the database yet.
+6. **Scheduler on Vercel** — use external cron hitting `/api/cron/*` with `CRON_SECRET`.
 
 ---
 
 ## Future Improvements
 
-- [ ] User authentication and role-based access
+- [x] User authentication (Google OAuth + allowlist)
+- [ ] Encrypt SMTP/IMAP credentials at rest
 - [ ] Background job queue for bulk sending (BullMQ / Inngest)
-- [ ] PostgreSQL support with connection pooling
-- [ ] Per-campaign contact selection in UI
+- [ ] Multi-user / per-user settings
 - [ ] Unsubscribe link generation and suppression list
-- [ ] Webhook-based reply detection (SendGrid Inbound Parse, Mailgun)
 - [ ] Rich HTML email template editor
 - [ ] Export campaign analytics to CSV
 - [ ] Signed tracking URLs to prevent enumeration

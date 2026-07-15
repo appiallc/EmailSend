@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import useSWR, { mutate as globalMutate } from "swr";
 import { Loader } from "@/components/Loader";
+import { API } from "@/lib/swr";
 
 interface Settings {
   companyName: string;
@@ -19,29 +21,32 @@ interface Settings {
 }
 
 export default function SettingsPage() {
+  const { data, isLoading, mutate } = useSWR<Settings>(API.settings);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
   const [checking, setChecking] = useState(false);
 
   useEffect(() => {
-    fetch("/api/settings")
-      .then((r) => r.json())
-      .then(setSettings);
-  }, []);
+    if (data) setSettings(data);
+  }, [data]);
 
   const save = async () => {
     if (!settings) return;
     setSaving(true);
-    const res = await fetch("/api/settings", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(settings),
-    });
-    const data = await res.json();
-    setSettings(data);
-    setSaving(false);
-    setMessage("Settings saved successfully.");
+    try {
+      const res = await fetch(API.settings, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(settings),
+      });
+      const updated = await res.json();
+      setSettings(updated);
+      await mutate(updated, { revalidate: false });
+      setMessage("Settings saved successfully.");
+    } finally {
+      setSaving(false);
+    }
   };
 
   const runScheduler = async () => {
@@ -50,18 +55,19 @@ export default function SettingsPage() {
 
     try {
       const res = await fetch("/api/scheduler/run", { method: "POST" });
-      const data = await res.json();
+      const result = await res.json();
 
       if (!res.ok) {
-        setMessage(`Error: ${data.error || "Scheduler run failed"}`);
+        setMessage(`Error: ${result.error || "Scheduler run failed"}`);
         return;
       }
 
-      let msg = `Scheduler run complete: ${data.replies} reply(ies), ${data.bounces ?? 0} bounce(s), ${data.followUps} follow-up(s) sent.`;
-      if (data.errors?.length) {
-        msg += ` Issues: ${data.errors.join("; ")}`;
+      let msg = `Scheduler run complete: ${result.replies} reply(ies), ${result.bounces ?? 0} bounce(s), ${result.followUps} follow-up(s) sent.`;
+      if (result.errors?.length) {
+        msg += ` Issues: ${result.errors.join("; ")}`;
       }
       setMessage(msg);
+      await Promise.all([globalMutate(API.campaigns), globalMutate(API.stats)]);
     } catch (err) {
       setMessage(
         `Error: ${err instanceof Error ? err.message : "Scheduler run failed"}`
@@ -71,7 +77,7 @@ export default function SettingsPage() {
     }
   };
 
-  if (!settings) {
+  if ((isLoading && !settings) || !settings) {
     return <Loader fullPage />;
   }
 
