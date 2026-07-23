@@ -42,6 +42,7 @@ model Campaign {
   followUpSubject  String                @default("")
   followUpBodyHtml String                @default("")
   followUpDays     Int                   @default(7)
+  extraFollowUps   Json                  @default("[]")
   status           String                @default("draft") // draft | sending | sent | paused
   createdAt        DateTime              @default(now())
   sentAt           DateTime?
@@ -63,6 +64,7 @@ model EmailLog {
   campaignId  String
   contactId   String
   type        String    // initial | followup
+  followUpStep Int      @default(0) // 0 = initial; 1+ = follow-up sequence
   status       String    @default("pending") // pending | sent | failed | opened | clicked | replied | bounced
   trackingId   String    @unique @default(cuid())
   messageId    String?

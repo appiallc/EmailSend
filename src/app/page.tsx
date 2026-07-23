@@ -121,105 +121,106 @@ export default function DashboardPage() {
             </Link>
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left text-slate-500 border-b border-slate-100 bg-slate-50/80">
-                  <th className="px-6 py-3 font-medium w-8" aria-hidden />
-                  <th className="px-6 py-3 font-medium">Campaign</th>
-                  <th className="px-6 py-3 font-medium">Status</th>
-                  <th className="px-6 py-3 font-medium">Sent</th>
-                  <th className="px-6 py-3 font-medium">Opened</th>
-                  <th className="px-6 py-3 font-medium">Replied</th>
-                  <th className="px-6 py-3 font-medium">Failed</th>
-                </tr>
-              </thead>
-              <tbody>
-                {campaignList.map((c) => {
-                  const m = campaignMetrics(c.emailLogs);
-                  const expanded = expandedId === c.id;
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-slate-500 border-b border-slate-100 bg-slate-50/80">
+                <th className="px-4 py-3 font-medium w-8" aria-hidden />
+                <th className="px-6 py-3 font-medium">Campaign</th>
+                <th className="px-6 py-3 font-medium">Status</th>
+                <th className="px-6 py-3 font-medium">Sent</th>
+                <th className="px-6 py-3 font-medium">Opened</th>
+                <th className="px-6 py-3 font-medium">Replied</th>
+                <th className="px-6 py-3 font-medium">Failed</th>
+              </tr>
+            </thead>
+            <tbody>
+              {campaignList.map((c) => {
+                const m = campaignMetrics(c.emailLogs);
+                const expanded = expandedId === c.id;
 
-                  return (
-                    <Fragment key={c.id}>
-                      <tr
-                        role="button"
-                        tabIndex={0}
-                        onClick={() => setExpandedId(expanded ? null : c.id)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" || e.key === " ") {
-                            e.preventDefault();
-                            setExpandedId(expanded ? null : c.id);
-                          }
-                        }}
-                        className={`border-b border-slate-50 cursor-pointer transition-colors ${
-                          expanded ? "bg-blue-50/60" : "hover:bg-slate-50"
-                        }`}
-                      >
-                        <td className="px-4 py-3 text-slate-400">
-                          <span
-                            className={`inline-block transition-transform ${expanded ? "rotate-90" : ""}`}
-                            aria-hidden
-                          >
-                            ▶
-                          </span>
-                        </td>
-                        <td className="px-6 py-3">
-                          <div className="font-medium text-slate-900">{c.name}</div>
-                          {c.subject && (
-                            <div className="text-xs text-slate-400 mt-0.5 truncate max-w-md">
-                              {c.subject}
-                            </div>
-                          )}
-                        </td>
-                        <td className="px-6 py-3">
-                          <span
-                            className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium capitalize ${campaignStatusClass(c.status)}`}
-                          >
-                            {c.status}
-                          </span>
-                        </td>
-                        <td className="px-6 py-3">
-                          {m.sent}/{m.total}
-                        </td>
-                        <td className="px-6 py-3">{m.opened}</td>
-                        <td className="px-6 py-3">{m.replied}</td>
-                        <td className="px-6 py-3">{m.failed || "—"}</td>
-                      </tr>
-                      {expanded && (
-                        <tr className="border-b border-slate-100 bg-slate-50/40">
-                          <td colSpan={7} className="px-4 py-4">
-                            <div className="rounded-lg border border-slate-200 bg-white overflow-hidden">
-                              <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
-                                <div>
-                                  <h3 className="font-medium text-slate-800">
-                                    {c.name} — Email tracking
-                                  </h3>
-                                  <p className="text-xs text-slate-400 mt-0.5">
-                                    Opens count only 60+ seconds after send (prefetch filter).
-                                  </p>
-                                </div>
-                                <Link
-                                  href="/campaigns"
-                                  className="text-xs text-blue-600 hover:underline shrink-0"
-                                  onClick={(e) => e.stopPropagation()}
-                                >
-                                  Open in Campaigns
-                                </Link>
+                return (
+                  <Fragment key={c.id}>
+                    <tr
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => setExpandedId(expanded ? null : c.id)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          setExpandedId(expanded ? null : c.id);
+                        }
+                      }}
+                      className={`border-b border-slate-100 cursor-pointer transition-colors ${
+                        expanded
+                          ? "bg-white border-b-0"
+                          : "bg-white hover:bg-slate-50"
+                      }`}
+                    >
+                      <td className="px-4 py-3 text-slate-400">
+                        <span
+                          className={`inline-block transition-transform ${expanded ? "rotate-90" : ""}`}
+                          aria-hidden
+                        >
+                          ▶
+                        </span>
+                      </td>
+                      <td className="px-6 py-3">
+                        <div className="font-medium text-slate-900">{c.name}</div>
+                        {c.subject && (
+                          <div className="text-xs text-slate-400 mt-0.5 truncate max-w-md">
+                            {c.subject}
+                          </div>
+                        )}
+                      </td>
+                      <td className="px-6 py-3">
+                        <span
+                          className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium capitalize ${campaignStatusClass(c.status)}`}
+                        >
+                          {c.status}
+                        </span>
+                      </td>
+                      <td className="px-6 py-3">
+                        {m.sent}/{m.total}
+                      </td>
+                      <td className="px-6 py-3">{m.opened}</td>
+                      <td className="px-6 py-3">{m.replied}</td>
+                      <td className="px-6 py-3">{m.failed || "—"}</td>
+                    </tr>
+                    {expanded && (
+                      <tr className="border-b border-slate-200">
+                        <td colSpan={7} className="p-0 bg-slate-100">
+                          <div className="px-6 py-4 border-t border-slate-200/80">
+                            <div className="mb-3 flex items-start justify-between gap-4">
+                              <div>
+                                <h3 className="font-medium text-slate-800">
+                                  {c.name} — Email tracking
+                                </h3>
+                                <p className="text-xs text-slate-500 mt-0.5">
+                                  Opens count only 60+ seconds after send (prefetch filter).
+                                </p>
                               </div>
-                              <CampaignTrackingTable
-                                logs={c.emailLogs}
-                                onMarkReplied={markReplied}
-                              />
+                              <Link
+                                href="/campaigns"
+                                className="text-xs text-blue-600 hover:underline shrink-0"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                Open in Campaigns
+                              </Link>
                             </div>
-                          </td>
-                        </tr>
-                      )}
-                    </Fragment>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+                            <CampaignTrackingTable
+                              embedded
+                              logs={c.emailLogs}
+                              onMarkReplied={markReplied}
+                            />
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+              })}
+            </tbody>
+          </table>
         )}
       </div>
 

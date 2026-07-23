@@ -11,8 +11,15 @@ import {
 import { Loader } from "@/components/Loader";
 import { AlertBanner } from "@/components/AlertBanner";
 import { CampaignTrackingTable } from "@/components/CampaignTrackingTable";
+import { FollowUpStepsEditor } from "@/components/FollowUpStepsEditor";
 import { API } from "@/lib/swr";
 import type { CampaignEmailLog } from "@/lib/campaign-types";
+import {
+  getFollowUpSteps,
+  parseExtraFollowUps,
+  validateCampaignFollowUps,
+  type FollowUpStep,
+} from "@/lib/follow-ups";
 
 interface ContactList {
   id: string;
@@ -28,6 +35,7 @@ interface Campaign {
   followUpSubject: string;
   followUpBodyHtml: string;
   followUpDays: number;
+  extraFollowUps?: FollowUpStep[] | unknown;
   status: string;
   contactListIds: string[];
   contactLists: { id: string; name: string }[];
@@ -135,17 +143,34 @@ export default function CampaignsPage() {
         followUpSubject: DEFAULT_FOLLOWUP_SUBJECT,
         followUpBodyHtml: DEFAULT_FOLLOWUP_BODY,
         followUpDays: 7,
+        extraFollowUps: [],
         contactListIds: [],
       }),
     });
     const campaign = await res.json();
-    setEditing(campaign);
+    setEditing({
+      ...campaign,
+      extraFollowUps: parseExtraFollowUps(campaign.extraFollowUps),
+    });
     await mutateCampaigns();
   };
 
   const saveCampaign = async () => {
     if (!editing) return;
-    await fetch(API.campaigns, {
+
+    const extraFollowUps = parseExtraFollowUps(editing.extraFollowUps);
+    const validationError = validateCampaignFollowUps({
+      followUpDays: editing.followUpDays,
+      followUpSubject: editing.followUpSubject,
+      followUpBodyHtml: editing.followUpBodyHtml,
+      extraFollowUps,
+    });
+    if (validationError) {
+      setMessage(`Error: ${validationError}`);
+      return;
+    }
+
+    const res = await fetch(API.campaigns, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -156,9 +181,15 @@ export default function CampaignsPage() {
         followUpSubject: editing.followUpSubject,
         followUpBodyHtml: editing.followUpBodyHtml,
         followUpDays: editing.followUpDays,
+        extraFollowUps,
         contactListIds: editing.contactListIds,
       }),
     });
+    const data = await res.json();
+    if (data.error) {
+      setMessage(`Error: ${data.error}`);
+      return;
+    }
     setMessage("Campaign saved.");
     setEditing(null);
     await mutateCampaigns();
@@ -235,7 +266,7 @@ export default function CampaignsPage() {
         <div>
           <h1 className="text-2xl font-bold">Campaigns</h1>
           <p className="text-slate-500 mt-1">
-            Create outreach emails with automatic 1-week follow-ups
+            Create outreach emails with automatic follow-up sequences
           </p>
         </div>
         <button
@@ -289,39 +320,18 @@ export default function CampaignsPage() {
                 onChange={(e) => setEditing({ ...editing, bodyHtml: e.target.value })}
               />
             </div>
-            <div className="border-t pt-4">
-              <h3 className="font-medium text-sm mb-3">Follow-up (sent after no reply)</h3>
-              <div className="grid grid-cols-2 gap-4 mb-3">
-                <div>
-                  <label className="block text-sm font-medium mb-1">Days until follow-up</label>
-                  <input
-                    type="number"
-                    min={1}
-                    className="w-full border rounded-lg px-3 py-2 text-sm"
-                    value={editing.followUpDays}
-                    onChange={(e) =>
-                      setEditing({ ...editing, followUpDays: parseInt(e.target.value) || 7 })
-                    }
-                  />
-                </div>
-              </div>
-              <div className="mb-3">
-                <label className="block text-sm font-medium mb-1">Follow-up Subject</label>
-                <input
-                  className="w-full border rounded-lg px-3 py-2 text-sm"
-                  value={editing.followUpSubject}
-                  onChange={(e) => setEditing({ ...editing, followUpSubject: e.target.value })}
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium mb-1">Follow-up Body (HTML)</label>
-                <textarea
-                  className="w-full border rounded-lg px-3 py-2 text-sm font-mono h-32"
-                  value={editing.followUpBodyHtml}
-                  onChange={(e) => setEditing({ ...editing, followUpBodyHtml: e.target.value })}
-                />
-              </div>
-            </div>
+            <FollowUpStepsEditor
+              followUpDays={editing.followUpDays}
+              followUpSubject={editing.followUpSubject}
+              followUpBodyHtml={editing.followUpBodyHtml}
+              extraFollowUps={parseExtraFollowUps(editing.extraFollowUps)}
+              onChangeDefault={(patch) =>
+                setEditing({ ...editing, ...patch })
+              }
+              onChangeExtra={(extraFollowUps) =>
+                setEditing({ ...editing, extraFollowUps })
+              }
+            />
             <p className="text-xs text-slate-400">
               Use tags: {"{{first_name}}"}, {"{{last_name}}"}, {"{{full_name}}"}, {"{{company}}"}, {"{{title}}"}, {"{{email}}"}
             </p>
@@ -383,7 +393,9 @@ export default function CampaignsPage() {
                   <h3 className="font-semibold">{c.name}</h3>
                   <p className="text-sm text-slate-500 mt-1">{c.subject}</p>
                   <div className="flex gap-3 mt-2 text-xs text-slate-400">
-                    <span>Follow-up: {c.followUpDays} days</span>
+                    <span>
+                      Follow-ups: {getFollowUpSteps(c).length} step(s)
+                    </span>
                     <span>•</span>
                     <span>{c.emailLogs.length} recipient(s)</span>
                     <span>•</span>
@@ -408,7 +420,12 @@ export default function CampaignsPage() {
                     Track
                   </button>
                   <button
-                    onClick={() => setEditing(c)}
+                    onClick={() =>
+                      setEditing({
+                        ...c,
+                        extraFollowUps: parseExtraFollowUps(c.extraFollowUps),
+                      })
+                    }
                     className="px-3 py-1.5 text-xs border rounded-lg hover:bg-slate-50"
                   >
                     Edit

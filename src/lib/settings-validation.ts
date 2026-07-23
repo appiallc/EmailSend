@@ -30,14 +30,29 @@ function isValidEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
+function isValidMailHost(host: string): boolean {
+  if (!host || host.length > 253) return false;
+  if (host.includes("@") || host.includes("/") || host.includes(" ")) return false;
+
+  const ipv4 =
+    /^(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)$/;
+  if (ipv4.test(host)) return true;
+
+  const hostname =
+    /^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,63}$/;
+  return hostname.test(host);
+}
+
 function validatePort(port: number): string | undefined {
   if (!Number.isFinite(port) || port < 1 || port > 65535) {
     return "Port must be between 1 and 65535";
   }
 }
 
-function hasPassword(value: string): boolean {
-  return !!value.trim() && value !== MASKED_PASSWORD;
+/** Saved masked placeholder or any non-empty value counts as set. */
+function passwordIsSet(value: string): boolean {
+  const trimmed = value.trim();
+  return trimmed.length > 0;
 }
 
 export function validateSettings(settings: Settings): SettingsFieldErrors {
@@ -48,20 +63,23 @@ export function validateSettings(settings: Settings): SettingsFieldErrors {
     errors.baseUrl = "Enter a valid URL starting with http:// or https://";
   }
 
+  const smtpHost = settings.smtpHost.trim();
   const smtpStarted =
-    settings.smtpHost.trim() ||
+    smtpHost ||
     settings.smtpUser.trim() ||
     settings.smtpFrom.trim() ||
-    hasPassword(settings.smtpPass);
+    passwordIsSet(settings.smtpPass);
 
   if (smtpStarted) {
-    if (!settings.smtpHost.trim()) {
+    if (!smtpHost) {
       errors.smtpHost = "SMTP host is required";
+    } else if (!isValidMailHost(smtpHost)) {
+      errors.smtpHost = "Enter a valid hostname (e.g. smtp.gmail.com)";
     }
     if (!settings.smtpUser.trim()) {
       errors.smtpUser = "SMTP username is required";
     }
-    if (!hasPassword(settings.smtpPass)) {
+    if (!passwordIsSet(settings.smtpPass)) {
       errors.smtpPass = "SMTP password is required";
     }
 
@@ -81,19 +99,22 @@ export function validateSettings(settings: Settings): SettingsFieldErrors {
     }
   }
 
+  const imapHost = settings.imapHost.trim();
   const imapStarted =
-    settings.imapHost.trim() ||
+    imapHost ||
     settings.imapUser.trim() ||
-    hasPassword(settings.imapPass);
+    passwordIsSet(settings.imapPass);
 
   if (imapStarted) {
-    if (!settings.imapHost.trim()) {
+    if (!imapHost) {
       errors.imapHost = "IMAP host is required";
+    } else if (!isValidMailHost(imapHost)) {
+      errors.imapHost = "Enter a valid hostname (e.g. imap.gmail.com)";
     }
     if (!settings.imapUser.trim()) {
       errors.imapUser = "IMAP username is required";
     }
-    if (!hasPassword(settings.imapPass)) {
+    if (!passwordIsSet(settings.imapPass)) {
       errors.imapPass = "IMAP password is required";
     }
 

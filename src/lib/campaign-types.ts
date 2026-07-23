@@ -1,6 +1,7 @@
 export interface CampaignEmailLog {
   id: string;
   type: string;
+  followUpStep?: number;
   status: string;
   sentAt: string | null;
   openedAt: string | null;

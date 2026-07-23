@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import {
   DEFAULT_FOLLOWUP_BODY,
@@ -7,6 +8,16 @@ import {
   DEFAULT_INITIAL_SUBJECT,
 } from "@/lib/templates";
 import { syncCampaignContactLists } from "@/lib/contact-lists";
+import {
+  normalizeExtraFollowUps,
+  validateCampaignFollowUps,
+} from "@/lib/follow-ups";
+
+function parseFollowUpDays(value: unknown): number {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) return 7;
+  return Math.floor(n);
+}
 
 export async function GET() {
   const campaigns = await prisma.campaign.findMany({
@@ -35,14 +46,25 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   const body = await request.json();
 
+  const followUpPayload = {
+    followUpDays: parseFollowUpDays(body.followUpDays ?? 7),
+    followUpSubject: body.followUpSubject || DEFAULT_FOLLOWUP_SUBJECT,
+    followUpBodyHtml: body.followUpBodyHtml || DEFAULT_FOLLOWUP_BODY,
+    extraFollowUps: normalizeExtraFollowUps(body.extraFollowUps),
+  };
+
+  const validationError = validateCampaignFollowUps(followUpPayload);
+  if (validationError) {
+    return NextResponse.json({ error: validationError }, { status: 400 });
+  }
+
   const campaign = await prisma.campaign.create({
     data: {
       name: body.name || "New Campaign",
       subject: body.subject || DEFAULT_INITIAL_SUBJECT,
       bodyHtml: body.bodyHtml || DEFAULT_INITIAL_BODY,
-      followUpSubject: body.followUpSubject || DEFAULT_FOLLOWUP_SUBJECT,
-      followUpBodyHtml: body.followUpBodyHtml || DEFAULT_FOLLOWUP_BODY,
-      followUpDays: body.followUpDays ?? 7,
+      ...followUpPayload,
+      extraFollowUps: followUpPayload.extraFollowUps as unknown as Prisma.InputJsonValue,
     },
   });
 
@@ -78,6 +100,7 @@ export async function PATCH(request: NextRequest) {
     followUpSubject?: string;
     followUpBodyHtml?: string;
     followUpDays?: number;
+    extraFollowUps?: Prisma.InputJsonValue;
     status?: string;
   } = {};
 
@@ -86,8 +109,29 @@ export async function PATCH(request: NextRequest) {
   if (body.bodyHtml !== undefined) data.bodyHtml = body.bodyHtml;
   if (body.followUpSubject !== undefined) data.followUpSubject = body.followUpSubject;
   if (body.followUpBodyHtml !== undefined) data.followUpBodyHtml = body.followUpBodyHtml;
-  if (body.followUpDays !== undefined) data.followUpDays = Number(body.followUpDays) || 7;
+  if (body.followUpDays !== undefined) data.followUpDays = parseFollowUpDays(body.followUpDays);
+  if (body.extraFollowUps !== undefined) {
+    data.extraFollowUps = normalizeExtraFollowUps(
+      body.extraFollowUps
+    ) as unknown as Prisma.InputJsonValue;
+  }
   if (body.status !== undefined) data.status = body.status;
+
+  const existing = await prisma.campaign.findUnique({ where: { id } });
+  if (!existing) {
+    return NextResponse.json({ error: "Campaign not found" }, { status: 404 });
+  }
+
+  const merged = {
+    followUpDays: data.followUpDays ?? existing.followUpDays,
+    followUpSubject: data.followUpSubject ?? existing.followUpSubject,
+    followUpBodyHtml: data.followUpBodyHtml ?? existing.followUpBodyHtml,
+    extraFollowUps: data.extraFollowUps ?? existing.extraFollowUps,
+  };
+  const validationError = validateCampaignFollowUps(merged);
+  if (validationError) {
+    return NextResponse.json({ error: validationError }, { status: 400 });
+  }
 
   const campaign = await prisma.campaign.update({
     where: { id },
