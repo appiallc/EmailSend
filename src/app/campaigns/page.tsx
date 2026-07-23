@@ -9,25 +9,10 @@ import {
   DEFAULT_INITIAL_SUBJECT,
 } from "@/lib/templates";
 import { Loader } from "@/components/Loader";
+import { AlertBanner } from "@/components/AlertBanner";
+import { CampaignTrackingTable } from "@/components/CampaignTrackingTable";
 import { API } from "@/lib/swr";
-
-interface EmailLog {
-  id: string;
-  type: string;
-  status: string;
-  sentAt: string | null;
-  openedAt: string | null;
-  bouncedAt: string | null;
-  bounceReason: string | null;
-  bounceType: string | null;
-  repliedAt: string | null;
-  contact: {
-    email: string;
-    firstName: string;
-    lastName: string;
-    company: string;
-  };
-}
+import type { CampaignEmailLog } from "@/lib/campaign-types";
 
 interface ContactList {
   id: string;
@@ -46,7 +31,7 @@ interface Campaign {
   status: string;
   contactListIds: string[];
   contactLists: { id: string; name: string }[];
-  emailLogs: EmailLog[];
+  emailLogs: CampaignEmailLog[];
 }
 
 function ContactListPicker({
@@ -244,23 +229,6 @@ export default function CampaignsPage() {
     await Promise.all([refreshCampaigns(), globalMutate(API.stats)]);
   };
 
-  const statusBadge = (status: string) => {
-    const colors: Record<string, string> = {
-      pending: "bg-slate-100 text-slate-600",
-      sent: "bg-blue-100 text-blue-700",
-      opened: "bg-purple-100 text-purple-700",
-      clicked: "bg-indigo-100 text-indigo-700",
-      replied: "bg-green-100 text-green-700",
-      bounced: "bg-orange-100 text-orange-700",
-      failed: "bg-red-100 text-red-700",
-    };
-    return (
-      <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${colors[status] || colors.pending}`}>
-        {status}
-      </span>
-    );
-  };
-
   return (
     <div className="p-8 max-w-6xl">
       <div className="flex items-start justify-between mb-8">
@@ -278,11 +246,7 @@ export default function CampaignsPage() {
         </button>
       </div>
 
-      {message && (
-        <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-blue-800 text-sm">
-          {message}
-        </div>
-      )}
+      {message && <AlertBanner message={message} />}
 
       {editing && (
         <div className="mb-8 bg-white rounded-xl border p-6 shadow-sm">
@@ -392,63 +356,10 @@ export default function CampaignsPage() {
               Close
             </button>
           </div>
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left text-slate-500 border-b bg-slate-50">
-                <th className="px-4 py-3">Contact</th>
-                <th className="px-4 py-3">Type</th>
-                <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3">Sent</th>
-                <th className="px-4 py-3">Opened</th>
-                <th className="px-4 py-3">Bounced</th>
-                <th className="px-4 py-3">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {viewing.emailLogs.map((log) => (
-                <tr key={log.id} className="border-b border-slate-50">
-                  <td className="px-4 py-3">
-                    <div className="font-medium">
-                      {[log.contact.firstName, log.contact.lastName].filter(Boolean).join(" ") || log.contact.email}
-                    </div>
-                    <div className="text-xs text-slate-400">{log.contact.email}</div>
-                  </td>
-                  <td className="px-4 py-3 capitalize">{log.type}</td>
-                  <td className="px-4 py-3">{statusBadge(log.status)}</td>
-                  <td className="px-4 py-3">
-                    {log.sentAt ? new Date(log.sentAt).toLocaleString() : "—"}
-                  </td>
-                  <td className="px-4 py-3">
-                    {log.openedAt ? new Date(log.openedAt).toLocaleString() : "—"}
-                  </td>
-                  <td className="px-4 py-3">
-                    {log.bouncedAt ? (
-                      <div>
-                        <div>{new Date(log.bouncedAt).toLocaleString()}</div>
-                        {log.bounceReason && (
-                          <div className="text-xs text-slate-400 mt-0.5 max-w-xs truncate" title={log.bounceReason}>
-                            {log.bounceType}: {log.bounceReason}
-                          </div>
-                        )}
-                      </div>
-                    ) : (
-                      "—"
-                    )}
-                  </td>
-                  <td className="px-4 py-3">
-                    {log.status !== "replied" && log.status !== "bounced" && (
-                      <button
-                        onClick={() => markReplied(log.id)}
-                        className="text-xs text-green-600 hover:underline"
-                      >
-                        Mark replied
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <CampaignTrackingTable
+            logs={viewing.emailLogs}
+            onMarkReplied={markReplied}
+          />
         </div>
       )}
 

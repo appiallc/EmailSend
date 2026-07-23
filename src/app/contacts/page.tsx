@@ -4,6 +4,7 @@ import { useEffect, useState, useRef } from "react";
 import useSWR, { mutate as globalMutate } from "swr";
 import { CSV_FORMAT } from "@/lib/csv";
 import { Loader } from "@/components/Loader";
+import { AlertBanner } from "@/components/AlertBanner";
 import { API } from "@/lib/swr";
 
 interface Contact {
@@ -37,6 +38,10 @@ const emptyContact = (): Contact => ({
 
 function isTempId(id: string) {
   return id.startsWith("new-");
+}
+
+function listNameFromFileName(fileName: string): string {
+  return fileName.replace(/\.[^/.]+$/, "").trim();
 }
 
 export default function ContactsPage() {
@@ -92,7 +97,8 @@ export default function ContactsPage() {
     Promise.all([mutateLists(), globalMutate(API.stats), globalMutate(API.campaigns)]);
 
   const createList = async (file: File) => {
-    if (!newListName.trim()) {
+    const name = newListName.trim() || listNameFromFileName(file.name);
+    if (!name) {
       setMessage("Error: List name is required.");
       return;
     }
@@ -102,7 +108,7 @@ export default function ContactsPage() {
     const res = await fetch(API.contactLists, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: newListName.trim(), csv }),
+      body: JSON.stringify({ name, csv }),
     });
     const data = await res.json();
     setImporting(false);
@@ -361,11 +367,7 @@ export default function ContactsPage() {
         </div>
       </div>
 
-      {message && (
-        <div className="mb-4 rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-green-800 text-sm">
-          {message}
-        </div>
-      )}
+      {message && <AlertBanner message={message} />}
 
       {showFormat && (
         <div className="mb-6 bg-white rounded-xl border p-5">
@@ -388,7 +390,7 @@ export default function ContactsPage() {
               <input
                 className="w-full border rounded-lg px-3 py-2 text-sm"
                 value={newListName}
-                placeholder="e.g. SaaS Leads Q1"
+                placeholder="Optional — uses CSV file name if empty"
                 onChange={(e) => setNewListName(e.target.value)}
               />
             </div>
