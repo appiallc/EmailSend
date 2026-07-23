@@ -5,6 +5,7 @@ export interface CampaignEmailLog {
   status: string;
   sentAt: string | null;
   openedAt: string | null;
+  clickedAt: string | null;
   bouncedAt: string | null;
   bounceReason: string | null;
   bounceType: string | null;

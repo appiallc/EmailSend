@@ -188,7 +188,7 @@ export default function DashboardPage() {
                     </tr>
                     {expanded && (
                       <tr className="border-b border-slate-200">
-                        <td colSpan={7} className="p-0 bg-slate-100">
+                        <td colSpan={8} className="p-0 bg-slate-100">
                           <div className="px-6 py-4 border-t border-slate-200/80">
                             <div className="mb-3 flex items-start justify-between gap-4">
                               <div>

@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { CampaignEmailLog } from "@/lib/campaign-types";
 import { EmailStatusBadge } from "@/components/EmailStatusBadge";
 
@@ -13,6 +14,9 @@ export function CampaignTrackingTable({
   /** Full-width layout inside dashboard expand — no inner horizontal scroll */
   embedded?: boolean;
 }) {
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(5);
+
   const sentLogs = logs.filter((l) => l.status !== "pending");
 
   if (sentLogs.length === 0) {
@@ -20,6 +24,12 @@ export function CampaignTrackingTable({
       <p className="px-4 py-6 text-center text-sm text-slate-500">{emptyMessage}</p>
     );
   }
+
+  const totalPages = Math.ceil(sentLogs.length / pageSize);
+  const activePage = Math.min(Math.max(1, currentPage), Math.max(1, totalPages));
+  const startIndex = (activePage - 1) * pageSize;
+  const endIndex = Math.min(startIndex + pageSize, sentLogs.length);
+  const paginatedLogs = sentLogs.slice(startIndex, startIndex + pageSize);
 
   const table = (
     <table
@@ -32,6 +42,7 @@ export function CampaignTrackingTable({
           <th className={`py-3 font-medium w-24 ${embedded ? "" : "px-4"}`}>Status</th>
           <th className={`py-3 font-medium w-36 ${embedded ? "" : "px-4"}`}>Sent</th>
           <th className={`py-3 font-medium w-36 ${embedded ? "" : "px-4"}`}>Opened</th>
+          <th className={`py-3 font-medium w-36 ${embedded ? "" : "px-4"}`}>Clicked</th>
           <th className={`py-3 font-medium w-36 ${embedded ? "" : "px-4"}`}>Bounced</th>
           {onMarkReplied && (
             <th className={`py-3 font-medium w-24 ${embedded ? "" : "px-4"}`}>Actions</th>
@@ -39,7 +50,7 @@ export function CampaignTrackingTable({
         </tr>
       </thead>
       <tbody>
-        {sentLogs.map((log) => (
+        {paginatedLogs.map((log) => (
           <tr key={log.id} className="border-b border-slate-100/80">
             <td className={`py-3 align-top ${embedded ? "pl-0 pr-3" : "px-4"}`}>
               <div className="font-medium break-words">
@@ -67,6 +78,9 @@ export function CampaignTrackingTable({
             </td>
             <td className={`py-3 text-xs align-top whitespace-normal ${embedded ? "" : "px-4"}`}>
               {log.openedAt ? new Date(log.openedAt).toLocaleString() : "—"}
+            </td>
+            <td className={`py-3 text-xs align-top whitespace-normal ${embedded ? "" : "px-4"}`}>
+              {log.clickedAt ? new Date(log.clickedAt).toLocaleString() : "—"}
             </td>
             <td className={`py-3 text-xs align-top whitespace-normal ${embedded ? "" : "px-4"}`}>
               {log.bouncedAt ? (
@@ -104,7 +118,72 @@ export function CampaignTrackingTable({
     </table>
   );
 
-  if (embedded) return table;
+  const paginationControls = (
+    <div className="flex flex-col sm:flex-row items-center justify-between gap-4 border-t border-slate-100 px-4 py-3 bg-white mt-1 select-none text-xs">
+      <div className="flex items-center gap-4 text-slate-500">
+        <span>
+          Showing <span className="font-medium text-slate-700">{sentLogs.length === 0 ? 0 : startIndex + 1}</span> to{" "}
+          <span className="font-medium text-slate-700">{endIndex}</span> of{" "}
+          <span className="font-medium text-slate-700">{sentLogs.length}</span> emails
+        </span>
+        <div className="flex items-center gap-1.5 border-l border-slate-200 pl-4">
+          <span className="text-slate-400 font-medium">Batch:</span>
+          {[5, 10].map((size) => (
+            <button
+              key={size}
+              type="button"
+              onClick={() => {
+                setPageSize(size);
+                setCurrentPage(1);
+              }}
+              className={`px-2 py-1 rounded font-semibold border transition-colors ${
+                pageSize === size
+                  ? "bg-blue-50 text-blue-600 border-blue-200"
+                  : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"
+              }`}
+            >
+              {size}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+          disabled={activePage === 1}
+          className="px-2.5 py-1.5 border border-slate-200 rounded-lg bg-white text-slate-600 font-medium hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+        >
+          Previous
+        </button>
+        <span className="text-slate-500 font-medium px-1">
+          Page {activePage} of {Math.max(1, totalPages)}
+        </span>
+        <button
+          type="button"
+          onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+          disabled={activePage === totalPages}
+          className="px-2.5 py-1.5 border border-slate-200 rounded-lg bg-white text-slate-600 font-medium hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+        >
+          Next
+        </button>
+      </div>
+    </div>
+  );
 
-  return <div className="overflow-x-auto">{table}</div>;
+  if (embedded) {
+    return (
+      <div className="border border-slate-100 rounded-lg overflow-hidden bg-white mt-2">
+        <div className="overflow-x-auto">{table}</div>
+        {paginationControls}
+      </div>
+    );
+  }
+
+  return (
+    <div className="overflow-x-auto border border-slate-150 rounded-lg bg-white">
+      {table}
+      {paginationControls}
+    </div>
+  );
 }

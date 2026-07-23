@@ -113,6 +113,7 @@ export default function CampaignsPage() {
 
   useEffect(() => {
     if (!campaigns) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setSendSelections((prev) => {
       const next = { ...prev };
       for (const c of campaigns) {

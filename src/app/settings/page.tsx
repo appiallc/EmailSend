@@ -21,6 +21,7 @@ export default function SettingsPage() {
   const [checking, setChecking] = useState(false);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (data) setSettings(data);
   }, [data]);
 

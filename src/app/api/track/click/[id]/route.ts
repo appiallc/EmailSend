@@ -14,6 +14,7 @@ export async function GET(
       where: { id: log.id },
       data: {
         clickedAt: new Date(),
+        ...(log.openedAt ? {} : { openedAt: new Date() }),
         status: ["sent", "opened"].includes(log.status) ? "clicked" : log.status,
       },
     });

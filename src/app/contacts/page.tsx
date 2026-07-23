@@ -85,6 +85,7 @@ export default function ContactsPage() {
   useEffect(() => {
     if (!editing) return;
     if (editContactsData) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setEditContacts(Array.isArray(editContactsData) ? editContactsData : []);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- seed local rows when list or remote data changes
