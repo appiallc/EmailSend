@@ -188,23 +188,23 @@ export default function DashboardPage() {
                     </tr>
                     {expanded && (
                       <tr className="border-b border-slate-200">
-                        <td colSpan={8} className="p-0 bg-slate-100">
-                          <div className="px-6 py-4 border-t border-slate-200/80">
-                            <div className="mb-3 flex items-start justify-between gap-4">
+                        <td colSpan={7} className="p-0 bg-slate-50/50">
+                          <div className="pl-12 pr-6 py-6 border-t border-slate-200/80 border-l-[3px] border-l-blue-600">
+                            <div className="mb-4 flex items-center justify-between gap-4">
                               <div>
-                                <h3 className="font-medium text-slate-800">
-                                  {c.name} — Email tracking
+                                <h3 className="font-semibold text-slate-800 text-sm">
+                                  {c.name} — Email Tracking Logs
                                 </h3>
-                                <p className="text-xs text-slate-500 mt-0.5">
-                                  Opens count only 60+ seconds after send (prefetch filter).
+                                <p className="text-xs text-slate-400 mt-0.5">
+                                  Track delivery, opens, and replies in real-time.
                                 </p>
                               </div>
                               <Link
                                 href="/campaigns"
-                                className="text-xs text-blue-600 hover:underline shrink-0"
+                                className="text-xs text-blue-600 hover:text-blue-700 bg-blue-50 border border-blue-100 hover:border-blue-200 px-3 py-1.5 rounded-lg font-medium transition-colors cursor-pointer"
                                 onClick={(e) => e.stopPropagation()}
                               >
-                                Open in Campaigns
+                                View Campaign Details →
                               </Link>
                             </div>
                             <CampaignTrackingTable

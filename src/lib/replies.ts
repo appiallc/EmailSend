@@ -2,6 +2,7 @@ import Imap from "imap";
 import { simpleParser } from "mailparser";
 import { prisma } from "./db";
 import { mailFromParsed, parseBounceEmail } from "./bounces";
+import { handleReplyOrBounce } from "./campaign";
 
 const IMAP_CONNECT_TIMEOUT_MS = 20_000;
 const IMAP_OPERATION_TIMEOUT_MS = 15_000;
@@ -186,6 +187,8 @@ async function applyBounce(recipient: string, reason: string, bounceType: string
     },
   });
 
+  await handleReplyOrBounce(log.campaignId, log.contactId);
+
   console.log(
     `[bounces] Bounce detected — recipient: ${email}, reason: ${reason}, type: ${bounceType}, EmailLog: ${log.id}`
   );
@@ -232,6 +235,7 @@ async function applyReply(parsed: Awaited<ReturnType<typeof simpleParser>>) {
     where: { id: log.id },
     data: { status: "replied", repliedAt: new Date() },
   });
+  await handleReplyOrBounce(log.campaignId, log.contactId);
   return true;
 }
 

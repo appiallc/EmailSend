@@ -37,23 +37,21 @@ export function CampaignTrackingTable({
     >
       <thead>
         <tr className="text-left text-slate-500 border-b bg-slate-50/80">
-          <th className={`py-3 font-medium ${embedded ? "pl-0 pr-3" : "px-4"}`}>Contact</th>
-          <th className={`py-3 font-medium w-16 ${embedded ? "" : "px-4"}`}>Type</th>
-          <th className={`py-3 font-medium w-24 ${embedded ? "" : "px-4"}`}>Status</th>
-          <th className={`py-3 font-medium w-36 ${embedded ? "" : "px-4"}`}>Sent</th>
-          <th className={`py-3 font-medium w-36 ${embedded ? "" : "px-4"}`}>Opened</th>
-          <th className={`py-3 font-medium w-36 ${embedded ? "" : "px-4"}`}>Clicked</th>
-          <th className={`py-3 font-medium w-36 ${embedded ? "" : "px-4"}`}>Bounced</th>
+          <th className={`py-3 font-medium ${embedded ? "pl-4 pr-3" : "px-4"}`}>Contact</th>
+          <th className={`py-3 font-medium w-32 ${embedded ? "" : "px-4"}`}>Type</th>
+          <th className={`py-3 font-medium w-28 ${embedded ? "" : "px-4"}`}>Status</th>
+          <th className={`py-3 font-medium w-44 ${embedded ? "" : "px-4"}`}>Sent</th>
+          <th className={`py-3 font-medium w-44 ${embedded ? "" : "px-4"}`}>Opened</th>
           {onMarkReplied && (
-            <th className={`py-3 font-medium w-24 ${embedded ? "" : "px-4"}`}>Actions</th>
+            <th className={`py-3 font-medium w-32 ${embedded ? "" : "px-4"}`}>Actions</th>
           )}
         </tr>
       </thead>
       <tbody>
         {paginatedLogs.map((log) => (
-          <tr key={log.id} className="border-b border-slate-100/80">
-            <td className={`py-3 align-top ${embedded ? "pl-0 pr-3" : "px-4"}`}>
-              <div className="font-medium break-words">
+          <tr key={log.id} className="border-b border-slate-100/80 hover:bg-slate-50/40 transition-colors">
+            <td className={`py-3.5 align-middle ${embedded ? "pl-4 pr-3" : "px-4"}`}>
+              <div className="font-medium text-slate-900 break-words">
                 {[log.contact.firstName, log.contact.lastName]
                   .filter(Boolean)
                   .join(" ") || log.contact.email}
@@ -65,39 +63,22 @@ export function CampaignTrackingTable({
                 </div>
               )}
             </td>
-              <td className={`py-3 capitalize align-top ${embedded ? "" : "px-4"}`}>
-                {log.type === "followup"
-                  ? `Follow-up ${log.followUpStep || 1}`
-                  : log.type}
-              </td>
-            <td className={`py-3 align-top ${embedded ? "" : "px-4"}`}>
+            <td className={`py-3.5 capitalize align-middle text-slate-600 ${embedded ? "" : "px-4"}`}>
+              {log.type === "followup"
+                ? `Follow-up ${log.followUpStep || 1}`
+                : log.type}
+            </td>
+            <td className={`py-3.5 align-middle ${embedded ? "" : "px-4"}`}>
               <EmailStatusBadge status={log.status} />
             </td>
-            <td className={`py-3 text-xs align-top whitespace-normal ${embedded ? "" : "px-4"}`}>
+            <td className={`py-3.5 text-xs align-middle text-slate-500 whitespace-nowrap ${embedded ? "" : "px-4"}`}>
               {log.sentAt ? new Date(log.sentAt).toLocaleString() : "—"}
             </td>
-            <td className={`py-3 text-xs align-top whitespace-normal ${embedded ? "" : "px-4"}`}>
+            <td className={`py-3.5 text-xs align-middle text-slate-500 whitespace-nowrap ${embedded ? "" : "px-4"}`}>
               {log.openedAt ? new Date(log.openedAt).toLocaleString() : "—"}
             </td>
-            <td className={`py-3 text-xs align-top whitespace-normal ${embedded ? "" : "px-4"}`}>
-              {log.clickedAt ? new Date(log.clickedAt).toLocaleString() : "—"}
-            </td>
-            <td className={`py-3 text-xs align-top whitespace-normal ${embedded ? "" : "px-4"}`}>
-              {log.bouncedAt ? (
-                <div>
-                  <div>{new Date(log.bouncedAt).toLocaleString()}</div>
-                  {log.bounceReason && (
-                    <div className="text-xs text-slate-400 mt-0.5 break-words" title={log.bounceReason}>
-                      {log.bounceType}: {log.bounceReason}
-                    </div>
-                  )}
-                </div>
-              ) : (
-                "—"
-              )}
-            </td>
             {onMarkReplied && (
-              <td className={`py-3 align-top ${embedded ? "" : "px-4"}`}>
+              <td className={`py-3.5 align-middle ${embedded ? "" : "px-4"}`}>
                 {log.status !== "replied" && log.status !== "bounced" && (
                   <button
                     type="button"
@@ -105,7 +86,7 @@ export function CampaignTrackingTable({
                       e.stopPropagation();
                       onMarkReplied(log.id);
                     }}
-                    className="text-xs text-green-600 hover:underline"
+                    className="text-xs text-green-600 hover:text-green-700 font-medium hover:underline border border-green-200 bg-green-50/50 hover:bg-green-50 px-2 h-7.5 rounded-lg transition-colors inline-flex items-center justify-center whitespace-nowrap"
                   >
                     Mark replied
                   </button>

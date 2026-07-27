@@ -332,6 +332,54 @@ export default function ContactsPage() {
     URL.revokeObjectURL(url);
   };
 
+  const downloadListAsCSV = (contacts: Contact[], listName: string) => {
+    if (contacts.length === 0) {
+      alert("No contacts in this list to download.");
+      return;
+    }
+    const headers = [
+      "email",
+      "first_name",
+      "last_name",
+      "company",
+      "title",
+      "phone",
+      "notes",
+    ];
+
+    const rows = contacts.map((c) => [
+      c.email || "",
+      c.firstName || "",
+      c.lastName || "",
+      c.company || "",
+      c.title || "",
+      c.phone || "",
+      c.notes || "",
+    ]);
+
+    const csvContent = [
+      headers.join(","),
+      ...rows.map((row) =>
+        row
+          .map((val) => {
+            const escaped = String(val).replace(/"/g, '""');
+            return `"${escaped}"`;
+          })
+          .join(",")
+      ),
+    ].join("\n");
+
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    const sanitizedName = listName.replace(/[^a-z0-9]/gi, "_").toLowerCase();
+    link.setAttribute("download", `${sanitizedName}_contacts.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   const inputClass = "w-full border rounded px-2 py-1.5 text-xs bg-white";
 
   return (
@@ -633,6 +681,27 @@ export default function ContactsPage() {
               </p>
             </div>
             <div className="flex gap-2">
+              <button
+                onClick={() => downloadListAsCSV(viewContacts, viewing.name)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs text-blue-600 border border-blue-200 rounded-lg hover:bg-blue-50 font-medium transition-colors"
+                title="Download Contacts as CSV"
+              >
+                <svg
+                  className="w-3.5 h-3.5"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                  xmlns="http://www.w3.org/2000/svg"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
+                  />
+                </svg>
+                Download CSV
+              </button>
               <button
                 onClick={() => replaceFileRef.current?.click()}
                 disabled={importing}

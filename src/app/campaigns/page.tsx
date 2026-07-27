@@ -261,6 +261,65 @@ export default function CampaignsPage() {
     await Promise.all([refreshCampaigns(), globalMutate(API.stats)]);
   };
 
+  const downloadLogsAsCSV = (logs: CampaignEmailLog[], campaignName: string) => {
+    const sentLogs = logs.filter((l) => l.status !== "pending");
+    if (sentLogs.length === 0) {
+      alert("No email logs to download yet.");
+      return;
+    }
+    const headers = [
+      "First Name",
+      "Last Name",
+      "Email",
+      "Company",
+      "Type",
+      "Status",
+      "Sent At",
+      "Opened At",
+      "Replied At",
+    ];
+
+    const rows = sentLogs.map((log) => {
+      const typeStr = log.type === "followup"
+        ? `Follow-up ${log.followUpStep || 1}`
+        : log.type;
+
+      return [
+        log.contact.firstName || "",
+        log.contact.lastName || "",
+        log.contact.email || "",
+        log.contact.company || "",
+        typeStr,
+        log.status || "",
+        log.sentAt ? new Date(log.sentAt).toLocaleString() : "",
+        log.openedAt ? new Date(log.openedAt).toLocaleString() : "",
+        log.repliedAt ? new Date(log.repliedAt).toLocaleString() : "",
+      ];
+    });
+
+    const csvContent = [
+      headers.join(","),
+      ...rows.map((row) =>
+        row
+          .map((val) => {
+            const escaped = String(val).replace(/"/g, '""');
+            return `"${escaped}"`;
+          })
+          .join(",")
+      ),
+    ].join("\n");
+
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    const sanitizedCampaignName = campaignName.replace(/[^a-z0-9]/gi, "_").toLowerCase();
+    link.setAttribute("download", `${sanitizedCampaignName}_tracked_emails.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   return (
     <div className="p-8 max-w-6xl">
       <div className="flex items-start justify-between mb-8">
@@ -363,9 +422,32 @@ export default function CampaignsPage() {
                 Opens are counted only 60+ seconds after send to filter automatic email prefetch.
               </p>
             </div>
-            <button onClick={() => setViewing(null)} className="text-sm text-slate-500 hover:text-slate-800">
-              Close
-            </button>
+            <div className="flex items-center gap-4">
+              <button
+                onClick={() => downloadLogsAsCSV(viewing.emailLogs, viewing.name)}
+                className="inline-flex items-center gap-1.5 text-sm text-blue-600 hover:text-blue-800 font-medium transition-colors"
+                title="Download Tracked Emails as CSV"
+              >
+                <svg
+                  className="w-4 h-4"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                  xmlns="http://www.w3.org/2000/svg"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
+                  />
+                </svg>
+                Download CSV
+              </button>
+              <button onClick={() => setViewing(null)} className="text-sm text-slate-500 hover:text-slate-800">
+                Close
+              </button>
+            </div>
           </div>
           <CampaignTrackingTable
             logs={viewing.emailLogs}

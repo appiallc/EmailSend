@@ -60,6 +60,22 @@ export async function sendCampaignEmails(
 
   for (const log of logs) {
     try {
+      // If contact has already replied or bounced in this campaign, delete the pending log and skip
+      const checkRepliedOrBounced = await prisma.emailLog.findFirst({
+        where: {
+          campaignId,
+          contactId: log.contactId,
+          status: { in: ["replied", "bounced"] },
+        },
+      });
+
+      if (checkRepliedOrBounced) {
+        await prisma.emailLog.delete({
+          where: { id: log.id },
+        });
+        continue;
+      }
+
       let subject: string;
       let bodyHtml: string;
 
@@ -72,7 +88,9 @@ export async function sendCampaignEmails(
         if (!stepConfig) {
           throw new Error(`Missing follow-up step ${step}`);
         }
-        subject = stepConfig.subject;
+        // Threaded follow-up emails must match the campaign's original subject, prefixed with 'Re: '
+        const cleanSubject = campaign.subject.trim();
+        subject = /^re:/i.test(cleanSubject) ? cleanSubject : `Re: ${cleanSubject}`;
         bodyHtml = stepConfig.bodyHtml;
       }
 
@@ -87,14 +105,37 @@ export async function sendCampaignEmails(
             })
           : null;
 
+      let inReplyTo: string | undefined = undefined;
+      let references: string | undefined = undefined;
+
+      if (type === "followup") {
+        const previousLogs = await prisma.emailLog.findMany({
+          where: {
+            campaignId,
+            contactId: log.contactId,
+            status: { in: ["sent", "opened", "clicked", "replied"] },
+          },
+          orderBy: { sentAt: "asc" },
+        });
+
+        if (previousLogs.length > 0) {
+          const lastLog = previousLogs[previousLogs.length - 1];
+          inReplyTo = lastLog.messageId ?? undefined;
+          references = previousLogs
+            .map((l) => l.messageId)
+            .filter((m): m is string => !!m)
+            .join(" ");
+        }
+      }
+
       const result = await sendTrackedEmail({
         settings,
         contact: log.contact,
         subject,
         bodyHtml,
         trackingId: log.trackingId,
-        inReplyTo: initialLog?.messageId ?? undefined,
-        references: initialLog?.messageId ?? undefined,
+        inReplyTo,
+        references,
       });
 
       const sentAt = new Date();
@@ -267,4 +308,28 @@ export async function createCampaignWithContacts(
   }
 
   return toCreate.length;
+}
+
+export async function handleReplyOrBounce(campaignId: string, contactId: string) {
+  // 1. Reset/cancel followUpDue on the initial email log
+  await prisma.emailLog.updateMany({
+    where: {
+      campaignId,
+      contactId,
+      type: "initial",
+    },
+    data: {
+      followUpDue: null,
+    },
+  });
+
+  // 2. Delete any pending follow-up logs to prevent them from being sent
+  await prisma.emailLog.deleteMany({
+    where: {
+      campaignId,
+      contactId,
+      type: "followup",
+      status: "pending",
+    },
+  });
 }

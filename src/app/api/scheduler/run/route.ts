@@ -2,10 +2,10 @@ import { NextResponse } from "next/server";
 import { runFollowUpProcessing, runReplyCheck } from "@/lib/scheduler-tasks";
 
 export async function POST() {
-  const [replyResult, followUpResult] = await Promise.all([
-    runReplyCheck(),
-    runFollowUpProcessing(),
-  ]);
+  // Await sequentially so that replies are checked and stored in the database first,
+  // before processing due follow-up emails.
+  const replyResult = await runReplyCheck();
+  const followUpResult = await runFollowUpProcessing();
 
   return NextResponse.json({
     replies: replyResult.replies,
