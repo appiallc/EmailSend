@@ -21,3 +21,14 @@ body {
 input, textarea, select {
   color: #0f172a;
 }
+
+button,
+[role="button"] {
+  cursor: pointer;
+}
+
+button:disabled,
+button[disabled],
+[role="button"][aria-disabled="true"] {
+  cursor: not-allowed;
+}

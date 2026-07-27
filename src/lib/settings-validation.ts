@@ -2,6 +2,7 @@ export const MASKED_PASSWORD = "••••••••";
 
 export interface Settings {
   companyName: string;
+  emailSignature: string;
   smtpHost: string;
   smtpPort: number;
   smtpSecure: boolean;

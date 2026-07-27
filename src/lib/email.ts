@@ -53,7 +53,11 @@ export async function sendTrackedEmail(opts: SendEmailOptions) {
 
   const subject = renderTemplate(opts.subject, opts.contact);
   const body = renderTemplate(opts.bodyHtml, opts.contact);
-  const html = injectTracking(body, baseUrl, opts.trackingId);
+  const signature = opts.settings.emailSignature?.trim();
+  const bodyWithSignature = signature
+    ? `${body}<div style="margin-top:16px">${renderTemplate(signature, opts.contact)}</div>`
+    : body;
+  const html = injectTracking(bodyWithSignature, baseUrl, opts.trackingId);
 
   const messageId = `<${opts.trackingId}@${baseUrl.replace(/^https?:\/\//, "")}>`;
 

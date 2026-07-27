@@ -131,6 +131,23 @@ export default function SettingsPage() {
               hint="Use your public deployed URL so opens/clicks can be tracked."
               onChange={(v) => update("baseUrl", v)}
             />
+            <div>
+              <label htmlFor="emailSignature" className="block text-sm font-medium mb-1">
+                Email Signature
+              </label>
+              <textarea
+                id="emailSignature"
+                rows={6}
+                className="w-full border rounded-lg px-3 py-2 text-sm font-mono"
+                value={settings.emailSignature ?? ""}
+                placeholder={"Best regards,<br/>Jane Doe<br/>Acme Inc.<br/><a href=\"https://acme.com\">acme.com</a>"}
+                onChange={(e) => update("emailSignature", e.target.value)}
+              />
+              <p className="mt-1 text-xs text-slate-400">
+                HTML is supported. Appended to every campaign and follow-up email. Merge tags like{" "}
+                <code>{"{{first_name}}"}</code> work here too.
+              </p>
+            </div>
           </div>
           {settings.baseUrl.includes("localhost") && !errors.baseUrl && (
             <p className="mt-3 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">

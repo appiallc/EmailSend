@@ -17,6 +17,7 @@ export async function PUT(request: NextRequest) {
   const data: Record<string, unknown> = {};
   const fields = [
     "companyName",
+    "emailSignature",
     "smtpHost",
     "smtpPort",
     "smtpSecure",
