@@ -434,8 +434,14 @@ def get_outreach_performance() -> str:
 if __name__ == "__main__":
     port_env = os.getenv("PORT")
     if port_env:
-        logger.info(f"Starting MCP server on port {port_env} using sse transport...")
-        mcp.run(transport="sse", host="0.0.0.0", port=int(port_env))
+        logger.info(f"Configuring MCP server for network hosting on port {port_env}...")
+        mcp.settings.host = "0.0.0.0"
+        mcp.settings.port = int(port_env)
+        # Disable DNS rebinding and local origin checks for cloud deployment
+        mcp.settings.transport_security = None
+        
+        logger.info("Starting MCP server using sse transport...")
+        mcp.run(transport="sse")
     else:
         logger.info("Starting MCP server using stdio transport...")
         mcp.run()
