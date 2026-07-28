@@ -8,6 +8,7 @@ import {
   createEmptyExtraFollowUp,
   type FollowUpStep,
 } from "@/lib/follow-ups";
+import { EmailPreview } from "@/components/EmailPreview";
 
 function followUpLabel(index: number) {
   return index === 0 ? "Follow-up 1 (default)" : `Follow-up ${index + 1}`;
@@ -18,6 +19,7 @@ export function FollowUpStepsEditor({
   followUpSubject,
   followUpBodyHtml,
   extraFollowUps,
+  emailSignature,
   onChangeDefault,
   onChangeExtra,
 }: {
@@ -25,6 +27,7 @@ export function FollowUpStepsEditor({
   followUpSubject: string;
   followUpBodyHtml: string;
   extraFollowUps: FollowUpStep[];
+  emailSignature?: string | null;
   onChangeDefault: (patch: {
     followUpDays?: number;
     followUpSubject?: string;
@@ -99,6 +102,12 @@ export function FollowUpStepsEditor({
             value={followUpBodyHtml}
             onChange={(e) => onChangeDefault({ followUpBodyHtml: e.target.value })}
           />
+          <EmailPreview
+            label={`${followUpLabel(0)} preview`}
+            subject={followUpSubject}
+            bodyHtml={followUpBodyHtml}
+            signature={emailSignature}
+          />
         </div>
       </div>
 
@@ -149,6 +158,12 @@ export function FollowUpStepsEditor({
               className="w-full border rounded-lg px-3 py-2 text-sm font-mono h-28"
               value={step.bodyHtml}
               onChange={(e) => updateExtra(index, { bodyHtml: e.target.value })}
+            />
+            <EmailPreview
+              label={`${followUpLabel(index + 1)} preview`}
+              subject={step.subject}
+              bodyHtml={step.bodyHtml}
+              signature={emailSignature}
             />
           </div>
         </div>

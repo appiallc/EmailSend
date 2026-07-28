@@ -36,6 +36,9 @@ function withTimeout<T>(
 
 function closeImap(imap: Imap): void {
   try {
+    // Swallow late errors so destroy()/timeouts don't crash the Node process.
+    imap.removeAllListeners("error");
+    imap.on("error", () => {});
     imap.destroy();
   } catch {
     // Connection may already be closed.
@@ -107,6 +110,7 @@ function connectImap(config: {
   password: string;
 }): Promise<Imap> {
   return new Promise((resolve, reject) => {
+    let settled = false;
     const imap = new Imap({
       user: config.user,
       password: config.password,
@@ -119,28 +123,32 @@ function connectImap(config: {
       socketTimeout: IMAP_OPERATION_TIMEOUT_MS,
     } as Imap.Config);
 
-    const timeout = setTimeout(() => {
-      cleanup();
-      closeImap(imap);
-      reject(new Error(`IMAP connection timed out after ${IMAP_CONNECT_TIMEOUT_MS / 1000}s`));
-    }, IMAP_CONNECT_TIMEOUT_MS);
-
-    const cleanup = () => {
+    const finish = (err?: Error, client?: Imap) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timeout);
       imap.removeListener("ready", onReady);
       imap.removeListener("error", onError);
+      // Keep a no-op error listener so late library timeouts aren't uncaught.
+      imap.on("error", () => {});
+      if (err) {
+        closeImap(imap);
+        reject(err);
+      } else {
+        resolve(client!);
+      }
     };
 
-    const onReady = () => {
-      cleanup();
-      resolve(imap);
-    };
+    const timeout = setTimeout(() => {
+      finish(
+        new Error(
+          `IMAP connection timed out after ${IMAP_CONNECT_TIMEOUT_MS / 1000}s`
+        )
+      );
+    }, IMAP_CONNECT_TIMEOUT_MS);
 
-    const onError = (err: Error) => {
-      cleanup();
-      closeImap(imap);
-      reject(err);
-    };
+    const onReady = () => finish(undefined, imap);
+    const onError = (err: Error) => finish(err);
 
     imap.once("ready", onReady);
     imap.once("error", onError);
@@ -188,6 +196,11 @@ async function applyBounce(recipient: string, reason: string, bounceType: string
   });
 
   await handleReplyOrBounce(log.campaignId, log.contactId);
+
+  if (bounceType === "HARD_BOUNCE") {
+    const { suppressEmail } = await import("./suppression");
+    await suppressEmail(email, "hard_bounce", log.trackingId);
+  }
 
   console.log(
     `[bounces] Bounce detected — recipient: ${email}, reason: ${reason}, type: ${bounceType}, EmailLog: ${log.id}`
@@ -306,8 +319,9 @@ export async function checkForReplies(): Promise<InboundCheckResult> {
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : "IMAP reply check failed";
-    console.error("[replies] IMAP reply check failed:", err);
-    throw new Error(message);
+    console.error("[replies] IMAP reply check failed:", message);
+    // Soft-fail: don't crash the scheduler / Node process on mail-host outages.
+    return { replies: 0, bounces: 0 };
   } finally {
     if (imap) closeImap(imap);
   }

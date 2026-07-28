@@ -1,6 +1,8 @@
 export const API = {
   stats: "/api/stats",
   settings: "/api/settings",
+  settingsTestSmtp: "/api/settings/test-smtp",
+  suppression: "/api/suppression",
   campaigns: "/api/campaigns",
   contactLists: "/api/contact-lists",
   contacts: (listId: string) => `/api/contacts?listId=${encodeURIComponent(listId)}`,

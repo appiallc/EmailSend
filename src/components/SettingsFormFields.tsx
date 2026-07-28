@@ -1,6 +1,9 @@
 "use client";
 
 import { useState } from "react";
+import { PASSWORD_MASK } from "@/lib/password-mask";
+
+export { PASSWORD_MASK };
 
 function EyeIcon() {
   return (
@@ -38,31 +41,51 @@ export function PasswordInput({
   autoComplete?: string;
 }) {
   const [visible, setVisible] = useState(false);
+  const isMasked = value === PASSWORD_MASK;
+  // Don't put the API mask in the input — it looks like a password and breaks show/hide.
+  const displayValue = isMasked ? "" : value;
+  const canToggle = displayValue.length > 0;
 
   return (
     <div>
       <div className="relative">
         <input
           id={id}
-          type={visible ? "text" : "password"}
+          type={visible && canToggle ? "text" : "password"}
           autoComplete={autoComplete}
           className={`w-full border rounded-lg px-3 py-2 pr-10 text-sm ${
             error ? "border-red-300 focus:outline-none focus:ring-2 focus:ring-red-200" : ""
           }`}
-          value={value}
-          placeholder={placeholder}
+          value={displayValue}
+          placeholder={
+            isMasked
+              ? "Password saved — type to change"
+              : placeholder
+          }
           onChange={(e) => onChange(e.target.value)}
           aria-invalid={!!error}
           aria-describedby={error && id ? `${id}-error` : undefined}
         />
         <button
           type="button"
-          onClick={() => setVisible((v) => !v)}
-          className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 rounded"
+          onClick={() => {
+            if (!canToggle) return;
+            setVisible((v) => !v);
+          }}
+          disabled={!canToggle}
+          className="absolute right-2 top-1/2 z-10 -translate-y-1/2 p-1.5 text-slate-500 hover:text-slate-800 rounded disabled:opacity-40 disabled:hover:text-slate-500"
           aria-label={visible ? "Hide password" : "Show password"}
-          tabIndex={-1}
+          title={
+            canToggle
+              ? visible
+                ? "Hide password"
+                : "Show password"
+              : isMasked
+                ? "Type a new password to show/hide"
+                : "Enter a password first"
+          }
         >
-          {visible ? <EyeOffIcon /> : <EyeIcon />}
+          {visible && canToggle ? <EyeOffIcon /> : <EyeIcon />}
         </button>
       </div>
       {error && (

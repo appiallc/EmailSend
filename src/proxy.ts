@@ -18,7 +18,9 @@ export const proxy = auth((req) => {
   if (
     pathname.startsWith("/api/auth") ||
     pathname.startsWith("/api/track") ||
-    pathname.startsWith("/api/cron")
+    pathname.startsWith("/api/cron") ||
+    pathname.startsWith("/api/unsubscribe") ||
+    pathname.startsWith("/unsubscribe")
   ) {
     return NextResponse.next();
   }

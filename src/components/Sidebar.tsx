@@ -20,12 +20,12 @@ export function Sidebar() {
   }
 
   return (
-    <aside className="w-64 shrink-0 border-r border-slate-200 bg-slate-950 text-white min-h-screen flex flex-col">
-      <div className="p-6 border-b border-slate-800">
+    <aside className="w-64 shrink-0 border-r border-slate-200 bg-slate-950 text-white h-full flex flex-col">
+      <div className="p-6 border-b border-slate-800 shrink-0">
         <h1 className="text-lg font-bold tracking-tight">MailTrack</h1>
         <p className="text-xs text-slate-400 mt-1">Email campaigns & follow-ups</p>
       </div>
-      <nav className="p-4 space-y-1 flex-1">
+      <nav className="p-4 space-y-1 flex-1 min-h-0 overflow-y-auto">
         {links.map((link) => {
           const active = pathname === link.href;
           return (
@@ -44,7 +44,7 @@ export function Sidebar() {
           );
         })}
       </nav>
-      <div className="p-4 border-t border-slate-800">
+      <div className="p-4 border-t border-slate-800 shrink-0 mt-auto">
         {session?.user?.email && (
           <p className="text-xs text-slate-400 truncate mb-2" title={session.user.email}>
             {session.user.email}

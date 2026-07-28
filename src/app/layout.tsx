@@ -31,13 +31,13 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body
-        className="min-h-full flex bg-slate-100 text-slate-900"
+        className="h-full overflow-hidden flex bg-slate-100 text-slate-900"
         suppressHydrationWarning
       >
         <AuthSessionProvider>
           <SwrProvider>
             <Sidebar />
-            <main className="flex-1 overflow-auto">{children}</main>
+            <main className="flex-1 min-h-0 overflow-auto">{children}</main>
           </SwrProvider>
         </AuthSessionProvider>
       </body>

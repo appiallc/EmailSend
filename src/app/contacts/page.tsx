@@ -416,7 +416,7 @@ export default function ContactsPage() {
         </div>
       </div>
 
-      {message && <AlertBanner message={message} />}
+      {message && <AlertBanner message={message} onClose={() => setMessage("")} />}
 
       {showFormat && (
         <div className="mb-6 bg-white rounded-xl border p-5">

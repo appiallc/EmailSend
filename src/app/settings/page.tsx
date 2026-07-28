@@ -11,6 +11,7 @@ import {
   type Settings,
   type SettingsFieldErrors,
 } from "@/lib/settings-validation";
+import { APPIA_EMAIL_SIGNATURE } from "@/lib/email-signature";
 
 export default function SettingsPage() {
   const { data, isLoading, mutate } = useSWR<Settings>(API.settings);
@@ -19,6 +20,16 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
   const [checking, setChecking] = useState(false);
+  const [testingSmtp, setTestingSmtp] = useState(false);
+  const [suppressEmailInput, setSuppressEmailInput] = useState("");
+  const [suppressBusy, setSuppressBusy] = useState(false);
+
+  const {
+    data: suppressed,
+    mutate: mutateSuppressed,
+  } = useSWR<{ id: string; email: string; reason: string; createdAt: string }[]>(
+    API.suppression
+  );
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -82,7 +93,7 @@ export default function SettingsPage() {
         return;
       }
 
-      let msg = `Scheduler run complete: ${result.replies} reply(ies), ${result.bounces ?? 0} bounce(s), ${result.followUps} follow-up(s) sent.`;
+      let msg = `Scheduler run complete: ${result.replies} reply(ies), ${result.bounces ?? 0} bounce(s), ${result.scheduledCampaigns ?? 0} campaign(s) queued, ${result.sent ?? 0} email(s) sent, ${result.followUps} follow-up(s) created.`;
       if (result.errors?.length) {
         msg += ` Issues: ${result.errors.join("; ")}`;
       }
@@ -94,6 +105,92 @@ export default function SettingsPage() {
       );
     } finally {
       setChecking(false);
+    }
+  };
+
+  const testSmtp = async () => {
+    setTestingSmtp(true);
+    setMessage("");
+    try {
+      // Persist current form values first so the test uses what the user typed
+      if (settings) {
+        const validationErrors = validateSettings(settings);
+        if (Object.keys(validationErrors).length > 0) {
+          setErrors(validationErrors);
+          setMessage("Error: Fix SMTP fields before testing.");
+          return;
+        }
+        const saveRes = await fetch(API.settings, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(settings),
+        });
+        const saved = await saveRes.json();
+        if (!saveRes.ok) {
+          setMessage(`Error: ${saved.error || "Could not save settings before test"}`);
+          return;
+        }
+        setSettings(saved);
+        await mutate(saved, { revalidate: false });
+      }
+
+      const res = await fetch(API.settingsTestSmtp, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) {
+        setMessage(`Error: ${data.error || "SMTP test failed"}`);
+        return;
+      }
+      setMessage(data.message || "SMTP connection successful.");
+    } catch (err) {
+      setMessage(
+        `Error: ${err instanceof Error ? err.message : "SMTP test failed"}`
+      );
+    } finally {
+      setTestingSmtp(false);
+    }
+  };
+
+  const addSuppressed = async () => {
+    const email = suppressEmailInput.trim();
+    if (!email) return;
+    setSuppressBusy(true);
+    setMessage("");
+    try {
+      const res = await fetch(API.suppression, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setMessage(`Error: ${data.error || "Could not add email"}`);
+        return;
+      }
+      setSuppressEmailInput("");
+      await mutateSuppressed();
+      setMessage(`Added ${data.email} to the suppression list.`);
+    } finally {
+      setSuppressBusy(false);
+    }
+  };
+
+  const removeSuppressed = async (email: string) => {
+    if (!confirm(`Remove ${email} from the suppression list?`)) return;
+    setSuppressBusy(true);
+    try {
+      const res = await fetch(
+        `${API.suppression}?email=${encodeURIComponent(email)}`,
+        { method: "DELETE" }
+      );
+      const data = await res.json();
+      if (!res.ok) {
+        setMessage(`Error: ${data.error || "Could not remove email"}`);
+        return;
+      }
+      await mutateSuppressed();
+      setMessage(`Removed ${email} from the suppression list.`);
+    } finally {
+      setSuppressBusy(false);
     }
   };
 
@@ -110,7 +207,7 @@ export default function SettingsPage() {
         </p>
       </div>
 
-      {message && <AlertBanner message={message} />}
+      {message && <AlertBanner message={message} onClose={() => setMessage("")} />}
 
       <div className="space-y-6">
         <section className="bg-white rounded-xl border p-6 shadow-sm">
@@ -132,21 +229,39 @@ export default function SettingsPage() {
               onChange={(v) => update("baseUrl", v)}
             />
             <div>
-              <label htmlFor="emailSignature" className="block text-sm font-medium mb-1">
-                Email Signature
-              </label>
+              <div className="flex items-center justify-between gap-3 mb-1">
+                <label htmlFor="emailSignature" className="block text-sm font-medium">
+                  Email Signature
+                </label>
+                <button
+                  type="button"
+                  onClick={() => update("emailSignature", APPIA_EMAIL_SIGNATURE)}
+                  className="text-xs font-medium text-slate-600 hover:text-slate-900 underline underline-offset-2"
+                >
+                  Use Appia signature
+                </button>
+              </div>
               <textarea
                 id="emailSignature"
-                rows={6}
+                rows={8}
                 className="w-full border rounded-lg px-3 py-2 text-sm font-mono"
                 value={settings.emailSignature ?? ""}
-                placeholder={"Best regards,<br/>Jane Doe<br/>Acme Inc.<br/><a href=\"https://acme.com\">acme.com</a>"}
+                placeholder={"Warm regards,<br/>Jay Kakadiya<br/>..."}
                 onChange={(e) => update("emailSignature", e.target.value)}
               />
               <p className="mt-1 text-xs text-slate-400">
                 HTML is supported. Appended to every campaign and follow-up email. Merge tags like{" "}
                 <code>{"{{first_name}}"}</code> work here too.
               </p>
+              {settings.emailSignature?.trim() ? (
+                <div className="mt-3 rounded-lg border bg-slate-50 p-4">
+                  <p className="text-xs font-medium text-slate-500 mb-2">Preview</p>
+                  <div
+                    className="text-sm"
+                    dangerouslySetInnerHTML={{ __html: settings.emailSignature }}
+                  />
+                </div>
+              ) : null}
             </div>
           </div>
           {settings.baseUrl.includes("localhost") && !errors.baseUrl && (
@@ -160,8 +275,21 @@ export default function SettingsPage() {
         <section className="bg-white rounded-xl border p-6 shadow-sm">
           <h2 className="font-semibold mb-1">SMTP — Outgoing Email</h2>
           <p className="text-xs text-slate-400 mb-4">
-            Use your company email provider (Gmail, Outlook, SendGrid SMTP, etc.)
+            Use your company email provider (Gmail, Outlook, Zoho SMTP, etc.).
+            Zoho custom domains often use <code className="text-[11px]">smtppro.zoho.in</code>{" "}
+            (India) or <code className="text-[11px]">smtppro.zoho.com</code> — port{" "}
+            <strong>465 + SSL</strong> or <strong>587 without SSL</strong> (STARTTLS).
           </p>
+          {(settings.smtpHost.includes("zoho.in") ||
+            settings.imapHost.includes("zoho.in")) && (
+            <p className="mb-4 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+              Your Zoho India hosts (<code>*.zoho.in</code>) are often blocked on some
+              networks and cause &quot;Connection timeout&quot; on send/IMAP. If Test SMTP
+              times out, try a VPN, unblock outbound ports 465/587/993 to Zoho, or use a
+              reachable SMTP provider. <code>*.zoho.com</code> may connect but usually
+              rejects India-region mailboxes (auth 535).
+            </p>
+          )}
           <div className="grid grid-cols-2 gap-4">
             <FormField
               id="smtpHost"
@@ -223,6 +351,69 @@ export default function SettingsPage() {
               )}
             </div>
           </div>
+          <div className="mt-4">
+            <button
+              type="button"
+              onClick={testSmtp}
+              disabled={testingSmtp || saving}
+              className="px-4 py-2 text-sm border rounded-lg hover:bg-slate-50 disabled:opacity-50"
+            >
+              {testingSmtp ? "Testing SMTP…" : "Test SMTP connection"}
+            </button>
+            <p className="mt-1 text-xs text-slate-400">
+              Saves current SMTP settings, then verifies login with your provider.
+            </p>
+          </div>
+        </section>
+
+        <section className="bg-white rounded-xl border p-6 shadow-sm">
+          <h2 className="font-semibold mb-1">Suppression list</h2>
+          <p className="text-xs text-slate-400 mb-4">
+            Unsubscribed and hard-bounced addresses are blocked from all future sends.
+            You can also add emails manually.
+          </p>
+          <div className="flex flex-wrap gap-2 mb-4">
+            <input
+              type="email"
+              className="flex-1 min-w-[200px] border rounded-lg px-3 py-2 text-sm"
+              placeholder="email@example.com"
+              value={suppressEmailInput}
+              onChange={(e) => setSuppressEmailInput(e.target.value)}
+            />
+            <button
+              type="button"
+              onClick={addSuppressed}
+              disabled={suppressBusy || !suppressEmailInput.trim()}
+              className="px-4 py-2 text-sm bg-slate-900 text-white rounded-lg disabled:opacity-50"
+            >
+              Add
+            </button>
+          </div>
+          {(suppressed?.length ?? 0) === 0 ? (
+            <p className="text-sm text-slate-400">No suppressed emails yet.</p>
+          ) : (
+            <ul className="divide-y border rounded-lg max-h-56 overflow-y-auto">
+              {suppressed?.map((row) => (
+                <li
+                  key={row.id}
+                  className="flex items-center justify-between gap-3 px-3 py-2 text-sm"
+                >
+                  <div className="min-w-0">
+                    <p className="font-medium truncate">{row.email}</p>
+                    <p className="text-xs text-slate-400 capitalize">{row.reason}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => removeSuppressed(row.email)}
+                    disabled={suppressBusy}
+                    className="text-xs text-red-600 hover:underline shrink-0"
+                  >
+                    Remove
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
         </section>
 
         <section className="bg-white rounded-xl border p-6 shadow-sm">
@@ -274,7 +465,7 @@ export default function SettingsPage() {
         <section className="bg-white rounded-xl border p-6 shadow-sm">
           <h2 className="font-semibold mb-1">Scheduler</h2>
           <p className="text-xs text-slate-400 mb-4">
-            On Vercel, automatic jobs need an external scheduler (e.g.{" "}
+            Automatic jobs are triggered from{" "}
             <a
               href="https://cron-job.org"
               target="_blank"
@@ -283,33 +474,50 @@ export default function SettingsPage() {
             >
               cron-job.org
             </a>
-            ). Local <code className="text-[11px]">npm run dev</code> runs them in-process.
+            . Local <code className="text-[11px]">npm run dev</code> also runs them
+            in-process.
           </p>
-          <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600 space-y-2">
-            <p className="font-medium text-slate-700">Vercel cron URLs (add header below)</p>
-            <p>
-              Reply check every 15 min:{" "}
-              <code className="break-all">
-                {settings.baseUrl.replace(/\/$/, "")}/api/cron/replies
-              </code>
+          <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600 space-y-3">
+            <p className="font-medium text-slate-700">
+              Create these two jobs on cron-job.org
             </p>
-            <p>
-              Follow-ups every hour:{" "}
-              <code className="break-all">
-                {settings.baseUrl.replace(/\/$/, "")}/api/cron/follow-ups
-              </code>
-            </p>
-            <p>
-              Header: <code>Authorization: Bearer YOUR_CRON_SECRET</code>
-            </p>
-            <p>Set <code>CRON_SECRET</code> in Vercel → Settings → Environment Variables.</p>
+            <div className="space-y-1">
+              <p className="font-medium text-slate-700">1. Outbound (every 1 minute)</p>
+              <p>
+                URL:{" "}
+                <code className="break-all">
+                  {settings.baseUrl.replace(/\/$/, "")}/api/cron/outbound
+                </code>
+              </p>
+              <p>Runs scheduled campaigns, the send queue, and due follow-ups.</p>
+            </div>
+            <div className="space-y-1">
+              <p className="font-medium text-slate-700">2. Replies (every 15 minutes)</p>
+              <p>
+                URL:{" "}
+                <code className="break-all">
+                  {settings.baseUrl.replace(/\/$/, "")}/api/cron/replies
+                </code>
+              </p>
+              <p>Detects replies and bounces via IMAP.</p>
+            </div>
+            <div className="space-y-1">
+              <p className="font-medium text-slate-700">Request header (both jobs)</p>
+              <p>
+                <code>Authorization: Bearer YOUR_CRON_SECRET</code>
+              </p>
+              <p>
+                Set the same value as <code>CRON_SECRET</code> in your app environment.
+                Use Base URL above as your public deployed URL (not localhost).
+              </p>
+            </div>
           </div>
           <button
             onClick={runScheduler}
             disabled={checking}
             className="px-4 py-2 text-sm border rounded-lg hover:bg-slate-50 disabled:opacity-50"
           >
-            {checking ? "Running..." : "Run Follow-up & Reply Check Now"}
+            {checking ? "Running..." : "Run scheduler now"}
           </button>
         </section>
 

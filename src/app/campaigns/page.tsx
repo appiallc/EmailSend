@@ -12,7 +12,9 @@ import { Loader } from "@/components/Loader";
 import { AlertBanner } from "@/components/AlertBanner";
 import { CampaignTrackingTable } from "@/components/CampaignTrackingTable";
 import { FollowUpStepsEditor } from "@/components/FollowUpStepsEditor";
+import { EmailPreview } from "@/components/EmailPreview";
 import { API } from "@/lib/swr";
+import type { Settings } from "@/lib/settings-validation";
 import type { CampaignEmailLog } from "@/lib/campaign-types";
 import {
   getFollowUpSteps,
@@ -37,9 +39,63 @@ interface Campaign {
   followUpDays: number;
   extraFollowUps?: FollowUpStep[] | unknown;
   status: string;
+  scheduledAt?: string | null;
   contactListIds: string[];
   contactLists: { id: string; name: string }[];
   emailLogs: CampaignEmailLog[];
+}
+
+function toDatetimeLocalValue(date: Date) {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function defaultScheduleLocalValue() {
+  const d = new Date(Date.now() + 60 * 60 * 1000);
+  d.setSeconds(0, 0);
+  return toDatetimeLocalValue(d);
+}
+
+function formatScheduledAt(iso: string | null | undefined) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleString(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+}
+
+/** e.g. "2 days 4 hours 30 mins" or "due now" */
+function formatTimeUntil(target: Date, nowMs = Date.now()): string | null {
+  if (Number.isNaN(target.getTime())) return null;
+  const ms = target.getTime() - nowMs;
+  if (ms <= 0) return "due now";
+
+  const totalMins = Math.floor(ms / 60_000);
+  const days = Math.floor(totalMins / (60 * 24));
+  const hours = Math.floor((totalMins % (60 * 24)) / 60);
+  const mins = totalMins % 60;
+
+  const parts: string[] = [];
+  if (days > 0) parts.push(`${days} day${days === 1 ? "" : "s"}`);
+  if (hours > 0) parts.push(`${hours} hour${hours === 1 ? "" : "s"}`);
+  if (mins > 0 || parts.length === 0) {
+    parts.push(`${mins} min${mins === 1 ? "" : "s"}`);
+  }
+  return parts.join(" ");
+}
+
+function scheduleCountdownLabel(localOrIso: string, nowMs = Date.now()) {
+  const target = new Date(localOrIso);
+  if (Number.isNaN(target.getTime())) return null;
+  const until = formatTimeUntil(target, nowMs);
+  if (!until) return null;
+  const when = formatScheduledAt(target.toISOString());
+  if (until === "due now") {
+    return `Will send now (${when})`;
+  }
+  return `Will be sent on ${when} — in ${until}`;
 }
 
 function ContactListPicker({
@@ -99,10 +155,18 @@ export default function CampaignsPage() {
     data: campaigns,
     isLoading: campaignsLoading,
     mutate: mutateCampaigns,
-  } = useSWR<Campaign[]>(API.campaigns);
+  } = useSWR<Campaign[]>(API.campaigns, {
+    refreshInterval: (data) =>
+      data?.some((c) => c.status === "sending") ? 5000 : 0,
+  });
   const { data: contactLists } = useSWR<ContactList[]>(API.contactLists);
+  const { data: settings } = useSWR<Settings>(API.settings);
+  const emailSignature = settings?.emailSignature ?? "";
   const [editing, setEditing] = useState<Campaign | null>(null);
   const [sendingId, setSendingId] = useState<string | null>(null);
+  const [schedulingId, setSchedulingId] = useState<string | null>(null);
+  const [scheduleDrafts, setScheduleDrafts] = useState<Record<string, string>>({});
+  const [nowTick, setNowTick] = useState(() => Date.now());
   const [message, setMessage] = useState("");
   const [viewing, setViewing] = useState<Campaign | null>(null);
   const [sendSelections, setSendSelections] = useState<Record<string, string[]>>({});
@@ -124,6 +188,16 @@ export default function CampaignsPage() {
       return next;
     });
   }, [campaigns]);
+
+  // Live countdown while picking a time or viewing a scheduled campaign.
+  useEffect(() => {
+    const needsTick =
+      schedulingId !== null ||
+      campaignList.some((c) => c.status === "scheduled" && !!c.scheduledAt);
+    if (!needsTick) return;
+    const id = window.setInterval(() => setNowTick(Date.now()), 15_000);
+    return () => window.clearInterval(id);
+  }, [schedulingId, campaignList]);
 
   const refreshCampaigns = async () => {
     const updated = await mutateCampaigns();
@@ -191,7 +265,7 @@ export default function CampaignsPage() {
       setMessage(`Error: ${data.error}`);
       return;
     }
-    setMessage("Campaign saved.");
+    setMessage("Campaign saved successfully.");
     setEditing(null);
     await mutateCampaigns();
   };
@@ -225,8 +299,110 @@ export default function CampaignsPage() {
       const data = await res.json();
       if (data.error) {
         setMessage(`Error: ${data.error}`);
+      } else if (data.queued) {
+        setMessage(
+          `Campaign queued successfully — ${data.recipients} recipient(s) sending in the background.${
+            data.suppressed
+              ? ` ${data.suppressed} suppressed email(s) skipped.`
+              : ""
+          }`
+        );
       } else {
-        setMessage(`Sent ${data.sent} email(s) to ${data.recipients} recipient(s). ${data.failed} failed.`);
+        setMessage(
+          `Campaign sent successfully — ${data.sent} email(s) to ${data.recipients} recipient(s).${
+            data.failed ? ` ${data.failed} failed.` : ""
+          }`
+        );
+      }
+      await Promise.all([refreshCampaigns(), globalMutate(API.stats)]);
+    } finally {
+      setSendingId(null);
+    }
+  };
+
+  const openSchedulePicker = (id: string) => {
+    setSchedulingId(id);
+    setScheduleDrafts((prev) => ({
+      ...prev,
+      [id]: prev[id] || defaultScheduleLocalValue(),
+    }));
+  };
+
+  const scheduleCampaign = async (id: string, sendToAll: boolean) => {
+    const selected = sendSelections[id] ?? [];
+    const localValue = scheduleDrafts[id] || defaultScheduleLocalValue();
+    const when = new Date(localValue);
+
+    if (Number.isNaN(when.getTime())) {
+      setMessage("Error: Choose a valid date and time.");
+      return;
+    }
+    if (when.getTime() <= Date.now()) {
+      setMessage("Error: Schedule time must be in the future.");
+      return;
+    }
+    if (!sendToAll && selected.length === 0) {
+      setMessage("Error: Select at least one contact list, or schedule for all contacts.");
+      return;
+    }
+
+    const label = sendToAll
+      ? "ALL contacts"
+      : selected.map((lid) => lists.find((l) => l.id === lid)?.name).join(", ");
+
+    if (
+      !confirm(
+        `Schedule this campaign for ${formatScheduledAt(when.toISOString())} to ${label}?`
+      )
+    ) {
+      return;
+    }
+
+    setSendingId(id);
+    setMessage("");
+    try {
+      const res = await fetch("/api/campaigns/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          campaignId: id,
+          action: "schedule",
+          scheduledAt: when.toISOString(),
+          sendToAll,
+          contactListIds: sendToAll ? undefined : selected,
+        }),
+      });
+      const data = await res.json();
+      if (data.error) {
+        setMessage(`Error: ${data.error}`);
+      } else {
+        setMessage(
+          `Successfully scheduled for ${formatScheduledAt(data.scheduledAt)} — ${data.recipients} recipient(s).`
+        );
+        setSchedulingId(null);
+      }
+      await Promise.all([refreshCampaigns(), globalMutate(API.stats)]);
+    } finally {
+      setSendingId(null);
+    }
+  };
+
+  const cancelSchedule = async (id: string) => {
+    if (!confirm("Cancel the scheduled send for this campaign?")) return;
+    setSendingId(id);
+    setMessage("");
+    try {
+      const res = await fetch("/api/campaigns/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ campaignId: id, action: "cancel-schedule" }),
+      });
+      const data = await res.json();
+      if (data.error) {
+        setMessage(`Error: ${data.error}`);
+      } else {
+        setMessage("Scheduled send cancelled successfully.");
+        setSchedulingId(null);
       }
       await Promise.all([refreshCampaigns(), globalMutate(API.stats)]);
     } finally {
@@ -246,7 +422,7 @@ export default function CampaignsPage() {
       return;
     }
 
-    setMessage("Campaign deleted.");
+    setMessage("Campaign deleted successfully.");
     if (editing?.id === id) setEditing(null);
     if (viewing?.id === id) setViewing(null);
     await Promise.all([mutateCampaigns(), globalMutate(API.stats)]);
@@ -337,7 +513,7 @@ export default function CampaignsPage() {
         </button>
       </div>
 
-      {message && <AlertBanner message={message} />}
+      {message && <AlertBanner message={message} onClose={() => setMessage("")} />}
 
       {editing && (
         <div className="mb-8 bg-white rounded-xl border p-6 shadow-sm">
@@ -379,12 +555,19 @@ export default function CampaignsPage() {
                 value={editing.bodyHtml}
                 onChange={(e) => setEditing({ ...editing, bodyHtml: e.target.value })}
               />
+              <EmailPreview
+                label="Initial email preview"
+                subject={editing.subject}
+                bodyHtml={editing.bodyHtml}
+                signature={emailSignature}
+              />
             </div>
             <FollowUpStepsEditor
               followUpDays={editing.followUpDays}
               followUpSubject={editing.followUpSubject}
               followUpBodyHtml={editing.followUpBodyHtml}
               extraFollowUps={parseExtraFollowUps(editing.extraFollowUps)}
+              emailSignature={emailSignature}
               onChangeDefault={(patch) =>
                 setEditing({ ...editing, ...patch })
               }
@@ -484,6 +667,12 @@ export default function CampaignsPage() {
                     <span>•</span>
                     <span className="capitalize">{c.status}</span>
                   </div>
+                  {c.status === "scheduled" && c.scheduledAt && (
+                    <p className="mt-2 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 inline-block">
+                      {scheduleCountdownLabel(c.scheduledAt, nowTick) ??
+                        `Scheduled for ${formatScheduledAt(c.scheduledAt)}`}
+                    </p>
+                  )}
                   <div className="mt-4">
                     <p className="text-xs font-medium text-slate-600 mb-2">Send to lists:</p>
                     <ContactListPicker
@@ -494,6 +683,73 @@ export default function CampaignsPage() {
                       }
                     />
                   </div>
+                  {schedulingId === c.id && c.status !== "scheduled" && (
+                    <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-3">
+                      <div>
+                        <label className="block text-xs font-medium text-slate-600 mb-1">
+                          Send date &amp; time
+                        </label>
+                        <input
+                          type="datetime-local"
+                          className="w-full max-w-xs border rounded-lg px-3 py-2 text-sm bg-white"
+                          value={scheduleDrafts[c.id] || defaultScheduleLocalValue()}
+                          min={toDatetimeLocalValue(new Date())}
+                          onChange={(e) => {
+                            setNowTick(Date.now());
+                            setScheduleDrafts((prev) => ({
+                              ...prev,
+                              [c.id]: e.target.value,
+                            }));
+                          }}
+                        />
+                        {(() => {
+                          const draft =
+                            scheduleDrafts[c.id] || defaultScheduleLocalValue();
+                          const label = scheduleCountdownLabel(draft, nowTick);
+                          const past =
+                            !Number.isNaN(new Date(draft).getTime()) &&
+                            new Date(draft).getTime() <= nowTick;
+                          return label ? (
+                            <p
+                              className={`mt-2 text-sm font-medium ${
+                                past ? "text-red-600" : "text-amber-800"
+                              }`}
+                            >
+                              {label}
+                            </p>
+                          ) : null;
+                        })()}
+                        <p className="text-[11px] text-slate-400 mt-1">
+                          Uses your local timezone. Sends within about a minute of this time while the app is running.
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => scheduleCampaign(c.id, false)}
+                          disabled={sendingId !== null}
+                          className="px-3 py-1.5 text-xs bg-amber-600 text-white rounded-lg disabled:opacity-50"
+                        >
+                          {sendingId === c.id ? "Scheduling..." : "Confirm schedule (selected)"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => scheduleCampaign(c.id, true)}
+                          disabled={sendingId !== null}
+                          className="px-3 py-1.5 text-xs border border-amber-300 text-amber-800 rounded-lg hover:bg-amber-50 disabled:opacity-50"
+                        >
+                          Schedule for all
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setSchedulingId(null)}
+                          className="px-3 py-1.5 text-xs border rounded-lg hover:bg-white"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
                 <div className="flex flex-col gap-2 shrink-0">
                   <button
@@ -519,6 +775,23 @@ export default function CampaignsPage() {
                   >
                     Delete
                   </button>
+                  {c.status === "scheduled" ? (
+                    <button
+                      onClick={() => cancelSchedule(c.id)}
+                      disabled={sendingId !== null}
+                      className="px-3 py-1.5 text-xs border border-amber-300 text-amber-800 rounded-lg hover:bg-amber-50 disabled:opacity-50"
+                    >
+                      Cancel schedule
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => openSchedulePicker(c.id)}
+                      disabled={sendingId !== null || c.status === "sending"}
+                      className="px-3 py-1.5 text-xs border border-amber-300 text-amber-800 rounded-lg hover:bg-amber-50 disabled:opacity-50"
+                    >
+                      Schedule
+                    </button>
+                  )}
                   <button
                     onClick={() => sendCampaign(c.id, false)}
                     disabled={sendingId !== null || c.status === "sending"}

@@ -8,9 +8,19 @@ const toneClasses: Record<AlertTone, string> = {
 
 export function toneFromMessage(message: string): AlertTone {
   const lower = message.toLowerCase();
-  if (lower.startsWith("error:")) return "error";
+  if (lower.startsWith("error:") || lower.startsWith("error ")) return "error";
   if (/\bsent 0 email/.test(lower) && /\bfailed\b/.test(lower)) return "error";
   if (/\bfailed\b/.test(lower) || lower.includes("issues:")) return "warning";
+  if (
+    lower.includes("success") ||
+    lower.includes("scheduled") ||
+    lower.includes("saved") ||
+    lower.includes("deleted") ||
+    lower.includes("created") ||
+    lower.includes("sent")
+  ) {
+    return "success";
+  }
   return "success";
 }
 

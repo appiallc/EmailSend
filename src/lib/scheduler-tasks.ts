@@ -1,5 +1,8 @@
+import {
+  processDueFollowUps,
+  processOutboundQueue,
+} from "./campaign";
 import { checkForReplies } from "./replies";
-import { processDueFollowUps } from "./campaign";
 
 const SCHEDULER_TASK_TIMEOUT_MS = 60_000;
 
@@ -10,7 +13,10 @@ export interface ReplyCheckResult {
   error: string | null;
 }
 
-async function runTimedTask<T>(name: string, task: () => Promise<T>): Promise<T | { error: string }> {
+async function runTimedTask<T>(
+  name: string,
+  task: () => Promise<T>
+): Promise<T | { error: string }> {
   let timeout: NodeJS.Timeout | undefined;
 
   try {
@@ -18,7 +24,9 @@ async function runTimedTask<T>(name: string, task: () => Promise<T>): Promise<T 
       task(),
       new Promise<never>((_, reject) => {
         timeout = setTimeout(() => {
-          reject(new Error(`${name} timed out after ${SCHEDULER_TASK_TIMEOUT_MS / 1000}s`));
+          reject(
+            new Error(`${name} timed out after ${SCHEDULER_TASK_TIMEOUT_MS / 1000}s`)
+          );
         }, SCHEDULER_TASK_TIMEOUT_MS);
       }),
     ]);
@@ -45,25 +53,30 @@ export async function runReplyCheck(): Promise<ReplyCheckResult> {
 }
 
 export async function runFollowUpProcessing() {
-  let timeout: NodeJS.Timeout | undefined;
-
-  try {
-    const count = await Promise.race([
-      processDueFollowUps(),
-      new Promise<never>((_, reject) => {
-        timeout = setTimeout(() => {
-          reject(
-            new Error(`Follow-up processing timed out after ${SCHEDULER_TASK_TIMEOUT_MS / 1000}s`)
-          );
-        }, SCHEDULER_TASK_TIMEOUT_MS);
-      }),
-    ]);
-    return { count, error: null as string | null };
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Follow-up processing failed";
-    console.error(`[scheduler] Follow-up processing failed:`, err);
-    return { count: 0, error: message };
-  } finally {
-    if (timeout) clearTimeout(timeout);
+  const result = await runTimedTask("Follow-up processing", processDueFollowUps);
+  if (typeof result === "object" && result && "error" in result) {
+    return { count: 0, error: result.error };
   }
+  return { count: result as number, error: null as string | null };
+}
+
+export async function runOutboundProcessing() {
+  const result = await runTimedTask("Outbound processing", processOutboundQueue);
+  if (typeof result === "object" && result && "error" in result) {
+    return {
+      scheduledQueued: 0,
+      sent: 0,
+      failed: 0,
+      skipped: 0,
+      campaigns: 0,
+      error: result.error,
+    };
+  }
+  const data = result as Awaited<ReturnType<typeof processOutboundQueue>>;
+  return { ...data, error: null as string | null };
+}
+
+/** @deprecated use runOutboundProcessing — kept for older imports */
+export async function runScheduledCampaignProcessing() {
+  return runOutboundProcessing();
 }

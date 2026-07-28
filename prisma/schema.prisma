@@ -43,11 +43,14 @@ model Campaign {
   followUpBodyHtml String                @default("")
   followUpDays     Int                   @default(7)
   extraFollowUps   Json                  @default("[]")
-  status           String                @default("draft") // draft | sending | sent | paused
+  status           String                @default("draft") // draft | scheduled | sending | sent | paused
   createdAt        DateTime              @default(now())
+  scheduledAt      DateTime?
   sentAt           DateTime?
   emailLogs        EmailLog[]
   contactLists     CampaignContactList[]
+
+  @@index([status, scheduledAt])
 }
 
 model CampaignContactList {
@@ -100,4 +103,15 @@ model Settings {
   imapUser       String  @default("")
   imapPass       String  @default("")
   baseUrl        String  @default("http://localhost:3000")
+}
+
+/** Global do-not-email list (unsubscribe, hard bounce, manual). */
+model SuppressedEmail {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  reason    String   @default("unsubscribe") // unsubscribe | hard_bounce | manual
+  source    String   @default("") // trackingId or note
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
 }
