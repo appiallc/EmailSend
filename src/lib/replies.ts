@@ -185,6 +185,14 @@ async function applyBounce(recipient: string, reason: string, bounceType: string
     return false;
   }
 
+  const { nextSoftBounceRetryAt, SOFT_BOUNCE_MAX_RETRIES } = await import(
+    "./deliverability"
+  );
+
+  const canRetrySoft =
+    bounceType === "SOFT_BOUNCE" && log.retryCount < SOFT_BOUNCE_MAX_RETRIES;
+  const retryAt = canRetrySoft ? nextSoftBounceRetryAt(log.retryCount) : null;
+
   await prisma.emailLog.update({
     where: { id: log.id },
     data: {
@@ -192,9 +200,14 @@ async function applyBounce(recipient: string, reason: string, bounceType: string
       bounceReason: reason,
       bounceType,
       bouncedAt: new Date(),
+      retryAt,
+      error: canRetrySoft
+        ? `Soft bounce — retry ${log.retryCount + 1}/${SOFT_BOUNCE_MAX_RETRIES} scheduled`
+        : null,
     },
   });
 
+  // Halt follow-ups until a soft-bounce retry succeeds (or forever for hard/final).
   await handleReplyOrBounce(log.campaignId, log.contactId);
 
   if (bounceType === "HARD_BOUNCE") {
@@ -203,7 +216,7 @@ async function applyBounce(recipient: string, reason: string, bounceType: string
   }
 
   console.log(
-    `[bounces] Bounce detected — recipient: ${email}, reason: ${reason}, type: ${bounceType}, EmailLog: ${log.id}`
+    `[bounces] Bounce detected — recipient: ${email}, reason: ${reason}, type: ${bounceType}, retryAt: ${retryAt?.toISOString() ?? "none"}, EmailLog: ${log.id}`
   );
   return true;
 }

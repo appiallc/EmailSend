@@ -62,6 +62,17 @@ export function CampaignTrackingTable({
                   {log.error}
                 </div>
               )}
+              {log.status === "bounced" && (
+                <div className="text-xs text-amber-700 mt-0.5 break-words">
+                  {[log.bounceType, log.bounceReason].filter(Boolean).join(" — ") ||
+                    "Bounced"}
+                </div>
+              )}
+              {log.subjectVariant && (
+                <div className="text-[10px] text-slate-400 mt-0.5">
+                  Subject {log.subjectVariant}
+                </div>
+              )}
             </td>
             <td className={`py-3.5 capitalize align-middle text-slate-600 ${embedded ? "" : "px-4"}`}>
               {log.type === "followup"

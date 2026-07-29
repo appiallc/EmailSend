@@ -6,13 +6,15 @@ import {
   processOutboundQueue,
 } from "@/lib/campaign";
 import { resolveContactsForSend } from "@/lib/contact-lists";
+import { getSuppressedEmailSet, normalizeEmail } from "@/lib/suppression";
 
 async function resolveSendContacts(body: {
   campaignId: string;
   contactListIds?: string[];
   sendToAll?: boolean;
+  allowDuplicates?: boolean;
 }) {
-  const { campaignId, sendToAll } = body;
+  const { campaignId, sendToAll, allowDuplicates } = body;
   let listIds: string[] | undefined = body.contactListIds;
 
   if (!sendToAll && !listIds?.length) {
@@ -26,8 +28,46 @@ async function resolveSendContacts(body: {
   return resolveContactsForSend({
     sendToAll: !!sendToAll,
     contactListIds: listIds,
-    dedupeByEmail: !sendToAll,
+    // Safer default: always dedupe unless explicitly allowing duplicates.
+    dedupeByEmail: !allowDuplicates,
   });
+}
+
+async function audiencePreview(body: {
+  campaignId: string;
+  contactListIds?: string[];
+  sendToAll?: boolean;
+  allowDuplicates?: boolean;
+}) {
+  const raw = await resolveContactsForSend({
+    sendToAll: !!body.sendToAll,
+    contactListIds: body.contactListIds,
+    dedupeByEmail: false,
+  });
+
+  const uniqueMap = new Map<string, (typeof raw)[0]>();
+  for (const c of raw) {
+    const key = normalizeEmail(c.email);
+    if (!uniqueMap.has(key)) uniqueMap.set(key, c);
+  }
+  const unique = [...uniqueMap.values()];
+  const suppressedSet = await getSuppressedEmailSet(unique.map((c) => c.email));
+  const eligible = unique.filter((c) => !suppressedSet.has(normalizeEmail(c.email)));
+
+  // Also resolve what would actually send with current flags.
+  const selected = await resolveSendContacts(body);
+  const selectedEligible = selected.filter(
+    (c) => !suppressedSet.has(normalizeEmail(c.email))
+  );
+
+  return {
+    rawCount: raw.length,
+    uniqueCount: unique.length,
+    duplicateCount: Math.max(0, raw.length - unique.length),
+    suppressedCount: unique.length - eligible.length,
+    willSendCount: selectedEligible.length,
+    allowDuplicates: !!body.allowDuplicates,
+  };
 }
 
 function kickOutboundWorker() {
@@ -42,18 +82,91 @@ function kickOutboundWorker() {
 
 export async function POST(request: NextRequest) {
   const body = await request.json();
-  const { campaignId, contactListIds, sendToAll, action, scheduledAt } = body;
+  const {
+    campaignId,
+    contactListIds,
+    sendToAll,
+    allowDuplicates,
+    action,
+    scheduledAt,
+  } = body;
 
-  if (!campaignId) {
-    return NextResponse.json({ error: "campaignId required" }, { status: 400 });
+  if (!campaignId && action !== "preview") {
+    // preview can work with list ids only, but we still require campaignId for consistency
   }
 
-  if (action === "cancel-schedule") {
+  if (action === "pause" || action === "resume") {
+    if (!campaignId) {
+      return NextResponse.json({ error: "campaignId required" }, { status: 400 });
+    }
     const campaign = await prisma.campaign.findUnique({ where: { id: campaignId } });
     if (!campaign) {
       return NextResponse.json({ error: "Campaign not found" }, { status: 404 });
     }
-    if (campaign.status !== "scheduled") {
+    if (action === "pause") {
+      if (campaign.status === "sending") {
+        return NextResponse.json(
+          { error: "Cannot pause while actively sending. Wait for the batch to finish." },
+          { status: 400 }
+        );
+      }
+      await prisma.campaign.update({
+        where: { id: campaignId },
+        data: {
+          status: "paused",
+          // keep scheduledAt so resume can restore intent, but halt processing via status
+        },
+      });
+      return NextResponse.json({ ok: true, status: "paused" });
+    }
+
+    // resume — restore the most useful prior state
+    const hasFutureSchedule =
+      !!campaign.scheduledAt && campaign.scheduledAt.getTime() > Date.now();
+    const hasDelivered = await prisma.emailLog.count({
+      where: {
+        campaignId,
+        status: { in: ["sent", "opened", "clicked", "replied", "bounced"] },
+      },
+    });
+    const hasPendingInitial = await prisma.emailLog.count({
+      where: { campaignId, type: "initial", status: "pending" },
+    });
+
+    let nextStatus: string;
+    if (hasFutureSchedule) {
+      nextStatus = "scheduled";
+    } else if (hasPendingInitial > 0) {
+      nextStatus = "sending";
+    } else if (hasDelivered > 0) {
+      nextStatus = "sent";
+    } else {
+      nextStatus = "draft";
+    }
+
+    await prisma.campaign.update({
+      where: { id: campaignId },
+      data: {
+        status: nextStatus,
+        // Clear stale schedule if we are no longer scheduled
+        scheduledAt: nextStatus === "scheduled" ? campaign.scheduledAt : null,
+      },
+    });
+    if (nextStatus === "sending") {
+      kickOutboundWorker();
+    }
+    return NextResponse.json({ ok: true, status: nextStatus });
+  }
+
+  if (action === "cancel-schedule") {
+    if (!campaignId) {
+      return NextResponse.json({ error: "campaignId required" }, { status: 400 });
+    }
+    const campaign = await prisma.campaign.findUnique({ where: { id: campaignId } });
+    if (!campaign) {
+      return NextResponse.json({ error: "Campaign not found" }, { status: 404 });
+    }
+    if (campaign.status !== "scheduled" && campaign.status !== "paused") {
       return NextResponse.json(
         { error: "Campaign is not scheduled" },
         { status: 400 }
@@ -66,10 +179,31 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: true, status: "draft" });
   }
 
+  if (action === "preview") {
+    if (!campaignId && !sendToAll && !contactListIds?.length) {
+      return NextResponse.json(
+        { error: "campaignId or contactListIds required" },
+        { status: 400 }
+      );
+    }
+    const preview = await audiencePreview({
+      campaignId: campaignId || "",
+      contactListIds,
+      sendToAll,
+      allowDuplicates,
+    });
+    return NextResponse.json(preview);
+  }
+
+  if (!campaignId) {
+    return NextResponse.json({ error: "campaignId required" }, { status: 400 });
+  }
+
   const contacts = await resolveSendContacts({
     campaignId,
     contactListIds,
     sendToAll,
+    allowDuplicates,
   });
 
   if (contacts.length === 0) {
@@ -159,6 +293,12 @@ export async function POST(request: NextRequest) {
     if (existing.status === "sending") {
       return NextResponse.json(
         { error: "Campaign is already sending" },
+        { status: 400 }
+      );
+    }
+    if (existing.status === "paused") {
+      return NextResponse.json(
+        { error: "Campaign is paused. Resume it before sending." },
         { status: 400 }
       );
     }

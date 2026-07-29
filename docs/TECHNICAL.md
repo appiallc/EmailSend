@@ -35,7 +35,7 @@
 - Automatically send follow-up emails after a configurable delay (default: 7 days)
 - Detect replies via IMAP or manual marking
 
-The application is built as a monolithic Next.js app with server-side API routes, a SQLite database, and background cron jobs started via Next.js instrumentation.
+The application is built as a monolithic Next.js app with server-side API routes, **PostgreSQL** (via Prisma), and outbound/reply workers triggered by external cron (cron-job.org) hitting `/api/cron/*`.
 
 ---
 
@@ -58,7 +58,7 @@ The application is built as a monolithic Next.js app with server-side API routes
 │                          │                                         │
 │                   ┌──────▼───────┐                                 │
 │                   │ Prisma ORM   │                                 │
-│                   │ SQLite (dev) │                                 │
+│                   │ PostgreSQL   │                                 │
 │                   └──────────────┘                                 │
 └────────────┬───────────────────────────────┬──────────────────────┘
              │ SMTP (nodemailer)              │ IMAP (optional)
@@ -69,12 +69,11 @@ The application is built as a monolithic Next.js app with server-side API routes
 
 ### Request flow — sending a campaign
 
-1. User clicks **Send to All** on the Campaigns page.
-2. `POST /api/campaigns/send` is called with `{ campaignId, action: "send" }`.
-3. `createCampaignWithContacts()` creates `EmailLog` records (one per contact, type `initial`, status `pending`).
-4. `sendCampaignEmails()` iterates pending logs, renders templates, injects tracking, and sends via SMTP.
-5. Each sent log is updated with `status: sent`, `sentAt`, `messageId`, and `followUpDue` (now + `followUpDays`).
-6. Campaign status is set to `sent` when all initial emails are processed.
+1. User clicks **Send** on the Campaigns page (audience preview first).
+2. `POST /api/campaigns/send` with `{ campaignId, action: "send", … }` creates pending `EmailLog` rows (deduped; suppressed skipped) and sets status `sending`.
+3. Response returns `{ queued: true }` immediately; `after()` and `/api/cron/outbound` drain the queue (~25/batch with `sendDelayMs` throttle).
+4. Soft bounces are retried (1h / 6h / 24h, max 3); hard bounces are suppressed.
+5. Campaign status becomes `sent` when no initial pendings remain.
 
 ### Request flow — open tracking
 
@@ -92,7 +91,7 @@ The application is built as a monolithic Next.js app with server-side API routes
 | Framework | Next.js 16 (App Router) | Full-stack React application |
 | Language | TypeScript | Type safety |
 | UI | React 19, Tailwind CSS 4 | Frontend components and styling |
-| Database | SQLite + Prisma 6 | Local persistence |
+| Database | PostgreSQL + Prisma 6 | Persistence (e.g. Supabase) |
 | Email (outbound) | Nodemailer | SMTP sending |
 | Email (inbound) | node-imap + mailparser | Reply detection |
 | CSV parsing | PapaParse | Contact import |
@@ -103,112 +102,48 @@ The application is built as a monolithic Next.js app with server-side API routes
 ## Project Structure
 
 ```
-emailsend/
-├── prisma/
-│   ├── schema.prisma          # Database models
-│   └── migrations/            # Migration history
+crm/
+├── prisma/schema.prisma
 ├── src/
-│   ├── app/
-│   │   ├── page.tsx           # Dashboard
-│   │   ├── contacts/page.tsx  # CSV import & contact list
-│   │   ├── campaigns/page.tsx # Campaign CRUD, send, tracking
-│   │   ├── settings/page.tsx  # SMTP/IMAP configuration
-│   │   └── api/               # REST API endpoints
-│   ├── components/
-│   │   ├── Sidebar.tsx
-│   │   └── StatCard.tsx
-│   ├── lib/
-│   │   ├── db.ts              # Prisma client singleton
-│   │   ├── csv.ts             # CSV parsing & column mapping
-│   │   ├── templates.ts       # Default templates & {{tag}} rendering
-│   │   ├── email.ts           # SMTP send + tracking injection
-│   │   ├── campaign.ts        # Campaign send & follow-up logic
-│   │   ├── replies.ts         # IMAP reply detection
-│   │   └── scheduler.ts       # Cron job definitions
-│   └── instrumentation.ts     # Starts scheduler on server boot
-├── sample-contacts.csv        # Example import file
-├── docs/
-│   └── TECHNICAL.md           # This document
-└── .env                       # DATABASE_URL and secrets
+│   ├── app/                 # Dashboard, contacts, campaigns, templates, settings, APIs
+│   ├── components/          # Sidebar, editors, tracking table, alerts
+│   └── lib/                 # campaign, email, replies, suppression, secrets, deliverability
+├── docs/TECHNICAL.md
+└── .env                     # DATABASE_URL, DIRECT_URL, AUTH_*, CRON_SECRET
 ```
 
 ---
 
 ## Database Schema
 
-### Contact
+### ContactList / Contact
 
-Stores imported leads. Email is unique (case-normalized to lowercase on import).
-
-| Column | Type | Description |
-|--------|------|-------------|
-| `id` | String (cuid) | Primary key |
-| `email` | String | Unique, required |
-| `firstName` | String | First name |
-| `lastName` | String | Last name |
-| `company` | String | Company name |
-| `title` | String | Job title |
-| `phone` | String | Phone number |
-| `notes` | String | Free-text notes |
-| `createdAt` | DateTime | Import timestamp |
+Contacts belong to lists (`ContactList`). Email is unique **per list** (`@@unique([contactListId, email])`).
 
 ### Campaign
 
-Defines an outreach campaign with initial and follow-up email templates.
-
 | Column | Type | Description |
 |--------|------|-------------|
-| `id` | String (cuid) | Primary key |
-| `name` | String | Display name |
-| `subject` | String | Initial email subject (supports `{{tags}}`) |
-| `bodyHtml` | String | Initial email HTML body |
-| `followUpSubject` | String | Follow-up subject |
-| `followUpBodyHtml` | String | Follow-up HTML body |
-| `followUpDays` | Int | Days after initial send before follow-up (default: 7) |
-| `status` | String | `draft` \| `sending` \| `sent` \| `paused` |
-| `createdAt` | DateTime | Creation timestamp |
-| `sentAt` | DateTime? | When all initial emails were sent |
+| `subject` / `subjectB` / `abTesting` | | Optional A/B subject split |
+| `extraFollowUps` | Json | Additional follow-up steps |
+| `status` | String | `draft` \| `scheduled` \| `sending` \| `sent` \| `paused` |
+| `scheduledAt` | DateTime? | When a scheduled send should start |
 
 ### EmailLog
 
-One record per email sent (or pending) to a contact within a campaign.
-
-| Column | Type | Description |
-|--------|------|-------------|
-| `id` | String (cuid) | Primary key |
-| `campaignId` | String | FK → Campaign |
-| `contactId` | String | FK → Contact |
-| `type` | String | `initial` \| `followup` |
-| `status` | String | See [status state machine](#email-status-state-machine) |
-| `trackingId` | String (cuid) | Unique ID used in tracking URLs |
-| `messageId` | String? | RFC 5322 Message-ID for reply threading |
-| `error` | String? | Error message if send failed |
-| `sentAt` | DateTime? | When email was sent |
-| `openedAt` | DateTime? | First open timestamp |
-| `clickedAt` | DateTime? | First click timestamp |
-| `repliedAt` | DateTime? | Reply timestamp |
-| `followUpDue` | DateTime? | Scheduled follow-up date (initial emails only) |
-
-**Indexes:** `campaignId`, `contactId`, `followUpDue`
+One record per email (pending or sent) in a campaign. Key fields: `type`, `status`, `trackingId`, `messageId`, bounce fields, `subjectVariant` (`A`/`B`), `retryCount` / `retryAt` (soft-bounce retries), `followUpDue`.
 
 ### Settings
 
-Singleton configuration row (`id = "default"`).
+Singleton (`id = "default"`). SMTP/IMAP, `emailSignature`, `baseUrl`, `sendDelayMs`. Passwords encrypted at rest (`enc:v1:…` via `AUTH_SECRET`).
 
-| Column | Type | Description |
-|--------|------|-------------|
-| `companyName` | String | Display name |
-| `smtpHost` | String | SMTP server hostname |
-| `smtpPort` | Int | SMTP port (587 or 465) |
-| `smtpSecure` | Boolean | `true` for SSL (port 465) |
-| `smtpUser` | String | SMTP username |
-| `smtpPass` | String | SMTP password (stored in DB) |
-| `smtpFrom` | String | From address |
-| `imapHost` | String | IMAP server (optional) |
-| `imapPort` | Int | IMAP port (default: 993) |
-| `imapUser` | String | IMAP username |
-| `imapPass` | String | IMAP password |
-| `baseUrl` | String | Public app URL for tracking pixels |
+### SuppressedEmail / EmailTemplate
+
+Global do-not-email list; reusable compose templates (`kind`: `initial` \| `followup`).
+
+### Email status state machine
+
+Statuses flow roughly: `pending` → `sent` → `opened` / `clicked` / `replied` / `bounced` / `failed`. Soft-bounced logs may return to `pending` for retry.
 
 ---
 
@@ -217,7 +152,15 @@ Singleton configuration row (`id = "default"`).
 ### `src/lib/db.ts`
 
 - Exports a Prisma client singleton (reused in development to avoid connection exhaustion).
-- `getSettings()` — fetches or creates the default settings row.
+- `getSettings()` — fetches or creates the default settings row; decrypts SMTP/IMAP passwords (lazy-migrates plaintext → `enc:v1`).
+
+### `src/lib/secrets.ts`
+
+- AES-256-GCM encrypt/decrypt using a key derived from `AUTH_SECRET`.
+
+### `src/lib/deliverability.ts`
+
+- Send delay helpers + soft-bounce retry schedule (1h / 6h / 24h, max 3).
 
 ### `src/lib/csv.ts`
 
@@ -617,11 +560,16 @@ Set `baseUrl` to your **publicly accessible** application URL in production. Tra
 
 ## Environment Variables
 
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `DATABASE_URL` | Yes | `file:./dev.db` | Prisma SQLite connection string |
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `DATABASE_URL` | Yes | Postgres connection (pooled URL OK) |
+| `DIRECT_URL` | Yes* | Direct Postgres URL for migrations (`db push`) |
+| `AUTH_SECRET` | Yes | Auth.js secret; also encrypts SMTP/IMAP passwords |
+| `AUTH_GOOGLE_ID` / `AUTH_GOOGLE_SECRET` | Yes | Google OAuth client |
+| `ALLOWED_EMAILS` | Yes | Comma-separated allowlist |
+| `CRON_SECRET` | Yes (prod) | Bearer token for `/api/cron/*` |
 
-SMTP and IMAP credentials are stored in the database (`Settings` table), not in environment variables. This allows runtime configuration via the UI.
+SMTP and IMAP credentials are stored encrypted in the `Settings` table and configured via the UI.
 
 ---
 
@@ -631,14 +579,13 @@ SMTP and IMAP credentials are stored in the database (`Settings` table), not in 
 
 - Node.js 20+
 - npm
+- PostgreSQL (e.g. Supabase)
 
 ### Setup
 
 ```bash
-git clone <repo-url>
-cd emailsend
 npm install
-npx prisma migrate dev
+npx prisma db push
 npm run dev
 ```
 
@@ -649,89 +596,58 @@ Open [http://localhost:3000](http://localhost:3000).
 | Command | Description |
 |---------|-------------|
 | `npm run dev` | Start development server |
-| `npm run build` | Generate Prisma client and build for production |
+| `npm run build` | Production build |
 | `npm run start` | Start production server |
-| `npm run lint` | Run ESLint |
+| `npx prisma db push` | Sync schema to Postgres |
 | `npx prisma studio` | Open database GUI |
 
-### Database migrations
-
-After changing `prisma/schema.prisma`:
-
-```bash
-npx prisma migrate dev --name describe_your_change
-```
+After changing `prisma/schema.prisma`, run `npx prisma db push` (and restart `npm run dev` on Windows if the Prisma client lock fails).
 
 ---
 
 ## Production Deployment
 
-### Checklist
-
-1. **Database** — SQLite works for small deployments. For production scale, migrate to PostgreSQL by changing the Prisma datasource.
-2. **Base URL** — Set to your public domain in Settings (e.g. `https://mailtrack.company.com`).
-3. **SMTP** — Use a dedicated sending domain with SPF, DKIM, and DMARC configured.
-4. **Process** — Deploy as a long-running Node.js process (VPS, Railway, Render, Docker). The scheduler requires the process to stay alive.
-5. **HTTPS** — Required for reliable tracking; email clients may block mixed-content pixels.
-
-### Docker (example)
-
-```dockerfile
-FROM node:20-alpine
-WORKDIR /app
-COPY package*.json ./
-RUN npm ci
-COPY . .
-RUN npx prisma migrate deploy && npm run build
-EXPOSE 3000
-CMD ["npm", "start"]
-```
-
-### Migrating to PostgreSQL
-
-1. Change `provider` in `prisma/schema.prisma` to `postgresql`.
-2. Set `DATABASE_URL` to your Postgres connection string.
-3. Run `npx prisma migrate dev`.
+1. Set env vars on the host (Vercel, etc.).
+2. Run `npx prisma db push` against production (or migrate).
+3. Configure cron-job.org for outbound (1 min) and replies (15 min).
+4. Set Settings → Base URL to the public domain; Test SMTP before large sends.
 
 ---
 
 ## Security Considerations
 
-| Area | Current state | Recommendation |
-|------|--------------|----------------|
-| Authentication | **Google OAuth (Auth.js)** + `ALLOWED_EMAILS` allowlist | Keep allowlist updated; set `AUTH_*` secrets in Vercel |
-| SMTP/IMAP passwords | Stored in Postgres plaintext | Encrypt at rest (Phase 2) or use secrets manager |
-| API endpoints | Auth required except track/cron/auth | Add rate limits on send and import endpoints |
-| Tracking endpoints | Public, no auth | Acceptable for pixels/redirects; consider signed URLs |
-| Cron endpoints | Bearer `CRON_SECRET` | Rotate secret periodically |
-| CSV upload | No file size limit | Add max file size validation |
-| IMAP TLS | `rejectUnauthorized: false` | Use proper CA certificates in production |
+| Area | Current state | Notes |
+|------|--------------|-------|
+| Authentication | Google OAuth + `ALLOWED_EMAILS` | Keep allowlist updated |
+| SMTP/IMAP passwords | Encrypted at rest (`AUTH_SECRET`) | Re-save passwords after rotating `AUTH_SECRET` |
+| API endpoints | Auth required except track/cron/auth/unsubscribe | Prefer rate limits for send/import |
+| Tracking endpoints | Public | Acceptable for pixels |
+| Cron endpoints | Bearer `CRON_SECRET` | Rotate periodically |
 
-**Sign-in:** Google only. Non-allowlisted accounts are rejected (`AccessDenied` → `/login`).
-
-**Public routes:** `/api/auth/*`, `/api/track/*`, `/api/cron/*` (token), `/login`.
+**Public routes:** `/api/auth/*`, `/api/track/*`, `/api/cron/*` (token), `/unsubscribe/*`, `/login`.
 
 ---
 
 ## Known Limitations
 
-1. **Single settings profile** — one SMTP/IMAP account for the entire app (shared after login).
-2. **Synchronous sending** — emails are sent sequentially in the request handler; large lists may timeout.
-3. **Open tracking accuracy** — blocked by privacy features in modern email clients.
-4. **No unsubscribe** — CAN-SPAM / GDPR compliance requires an unsubscribe mechanism for production outreach.
-5. **Credentials at rest** — SMTP/IMAP passwords are not encrypted in the database yet.
-6. **Scheduler on Vercel** — use external cron hitting `/api/cron/*` with `CRON_SECRET`.
+1. **Single settings profile** — one SMTP/IMAP account for the entire app.
+2. **Open tracking accuracy** — blocked by privacy features in many email clients.
+3. **Soft-bounce retries** are best-effort via IMAP classification; some providers use opaque DSNs.
+4. **Scheduler on serverless** — must use external cron hitting `/api/cron/*`.
+5. **Network / Zoho region** — some SMTP hosts (e.g. `*.zoho.in`) may be unreachable from certain networks.
 
 ---
 
 ## Future Improvements
 
 - [x] User authentication (Google OAuth + allowlist)
-- [ ] Encrypt SMTP/IMAP credentials at rest
-- [ ] Background job queue for bulk sending (BullMQ / Inngest)
+- [x] Encrypt SMTP/IMAP credentials at rest
+- [x] Background send queue + cron drain
+- [x] Unsubscribe + suppression list
+- [x] Rich HTML editor + templates library
+- [x] Send throttling + soft-bounce retry
+- [x] A/B subject variants
 - [ ] Multi-user / per-user settings
-- [ ] Unsubscribe link generation and suppression list
-- [ ] Rich HTML email template editor
 - [ ] Export campaign analytics to CSV
 - [ ] Signed tracking URLs to prevent enumeration
-- [ ] Rate limiting and send throttling
+- [ ] Multi-SMTP / dedicated sending domain UI

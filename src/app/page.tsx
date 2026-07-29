@@ -21,6 +21,7 @@ function campaignStatusClass(status: string) {
   if (status === "sent") return "bg-green-100 text-green-700";
   if (status === "sending") return "bg-blue-100 text-blue-700";
   if (status === "scheduled") return "bg-amber-100 text-amber-800";
+  if (status === "paused") return "bg-orange-100 text-orange-800";
   return "bg-slate-100 text-slate-600";
 }
 
@@ -57,7 +58,15 @@ export default function DashboardPage() {
     (stats.statusCounts.opened || 0) +
     (stats.statusCounts.clicked || 0) +
     (stats.statusCounts.replied || 0);
+  const totalClicked =
+    (stats.statusCounts.clicked || 0) + (stats.statusCounts.replied || 0);
   const totalReplied = stats.statusCounts.replied || 0;
+  const totalBounced = stats.statusCounts.bounced || 0;
+  const deliveredBase = totalSent + totalOpened;
+  const openRate =
+    deliveredBase > 0 ? Math.round((totalOpened / deliveredBase) * 100) : 0;
+  const replyRate =
+    deliveredBase > 0 ? Math.round((totalReplied / deliveredBase) * 100) : 0;
 
   return (
     <div className="p-8 max-w-6xl">
@@ -78,22 +87,24 @@ export default function DashboardPage() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
         <StatCard label="Contact Lists" value={stats.contactLists ?? 0} accent="blue" />
         <StatCard label="Campaigns" value={stats.campaigns} accent="purple" />
         <StatCard
           label="Emails Sent"
-          value={totalSent + totalOpened}
+          value={deliveredBase}
           accent="green"
         />
         <StatCard
-          label="Replies"
-          value={totalReplied}
-          sub={
-            totalSent + totalOpened > 0
-              ? `${Math.round((totalReplied / (totalSent + totalOpened)) * 100)}% reply rate`
-              : undefined
-          }
+          label="Open rate"
+          value={`${openRate}%`}
+          sub={`${totalOpened} opens · ${totalClicked} clicks`}
+          accent="blue"
+        />
+        <StatCard
+          label="Reply rate"
+          value={`${replyRate}%`}
+          sub={`${totalReplied} replies · ${totalBounced} bounced`}
           accent="amber"
         />
       </div>
@@ -129,8 +140,9 @@ export default function DashboardPage() {
                 <th className="px-6 py-3 font-medium">Campaign</th>
                 <th className="px-6 py-3 font-medium">Status</th>
                 <th className="px-6 py-3 font-medium">Sent</th>
-                <th className="px-6 py-3 font-medium">Opened</th>
-                <th className="px-6 py-3 font-medium">Replied</th>
+                <th className="px-6 py-3 font-medium">Open %</th>
+                <th className="px-6 py-3 font-medium">Reply %</th>
+                <th className="px-6 py-3 font-medium">Bounced</th>
                 <th className="px-6 py-3 font-medium">Failed</th>
               </tr>
             </thead>
@@ -183,13 +195,30 @@ export default function DashboardPage() {
                       <td className="px-6 py-3">
                         {m.sent}/{m.total}
                       </td>
-                      <td className="px-6 py-3">{m.opened}</td>
-                      <td className="px-6 py-3">{m.replied}</td>
+                      <td className="px-6 py-3">
+                        {m.openRate}%
+                        <span className="text-xs text-slate-400 ml-1">({m.opened})</span>
+                        {c.abTesting && m.variantA.sent + m.variantB.sent > 0 && (
+                          <div className="text-[10px] text-slate-400 mt-0.5">
+                            A {m.variantA.openRate}% · B {m.variantB.openRate}%
+                          </div>
+                        )}
+                      </td>
+                      <td className="px-6 py-3">
+                        {m.replyRate}%
+                        <span className="text-xs text-slate-400 ml-1">({m.replied})</span>
+                        {c.abTesting && m.variantA.sent + m.variantB.sent > 0 && (
+                          <div className="text-[10px] text-slate-400 mt-0.5">
+                            A {m.variantA.replyRate}% · B {m.variantB.replyRate}%
+                          </div>
+                        )}
+                      </td>
+                      <td className="px-6 py-3">{m.bounced || "—"}</td>
                       <td className="px-6 py-3">{m.failed || "—"}</td>
                     </tr>
                     {expanded && (
                       <tr className="border-b border-slate-200">
-                        <td colSpan={7} className="p-0 bg-slate-50/50">
+                        <td colSpan={8} className="p-0 bg-slate-50/50">
                           <div className="pl-12 pr-6 py-6 border-t border-slate-200/80 border-l-[3px] border-l-blue-600">
                             <div className="mb-4 flex items-center justify-between gap-4">
                               <div>

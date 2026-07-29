@@ -62,6 +62,8 @@ export async function POST(request: NextRequest) {
     data: {
       name: body.name || "New Campaign",
       subject: body.subject || DEFAULT_INITIAL_SUBJECT,
+      subjectB: body.subjectB || "",
+      abTesting: !!body.abTesting,
       bodyHtml: body.bodyHtml || DEFAULT_INITIAL_BODY,
       ...followUpPayload,
       extraFollowUps: followUpPayload.extraFollowUps as unknown as Prisma.InputJsonValue,
@@ -96,6 +98,8 @@ export async function PATCH(request: NextRequest) {
   const data: {
     name?: string;
     subject?: string;
+    subjectB?: string;
+    abTesting?: boolean;
     bodyHtml?: string;
     followUpSubject?: string;
     followUpBodyHtml?: string;
@@ -106,6 +110,8 @@ export async function PATCH(request: NextRequest) {
 
   if (body.name !== undefined) data.name = body.name;
   if (body.subject !== undefined) data.subject = body.subject;
+  if (body.subjectB !== undefined) data.subjectB = String(body.subjectB);
+  if (body.abTesting !== undefined) data.abTesting = !!body.abTesting;
   if (body.bodyHtml !== undefined) data.bodyHtml = body.bodyHtml;
   if (body.followUpSubject !== undefined) data.followUpSubject = body.followUpSubject;
   if (body.followUpBodyHtml !== undefined) data.followUpBodyHtml = body.followUpBodyHtml;

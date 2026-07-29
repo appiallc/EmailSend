@@ -228,6 +228,15 @@ export default function SettingsPage() {
               hint="Use your public deployed URL so opens/clicks can be tracked."
               onChange={(v) => update("baseUrl", v)}
             />
+            <FormField
+              id="sendDelayMs"
+              label="Send delay between emails (ms)"
+              type="number"
+              value={settings.sendDelayMs ?? 500}
+              error={errors.sendDelayMs}
+              hint="Throttles SMTP sends (0–60000). Soft bounces auto-retry up to 3 times (1h / 6h / 24h)."
+              onChange={(v) => update("sendDelayMs", parseInt(v, 10) || 0)}
+            />
             <div>
               <div className="flex items-center justify-between gap-3 mb-1">
                 <label htmlFor="emailSignature" className="block text-sm font-medium">
@@ -264,6 +273,10 @@ export default function SettingsPage() {
               ) : null}
             </div>
           </div>
+            <p className="mt-3 text-xs text-slate-500">
+              SMTP and IMAP passwords are encrypted at rest using{" "}
+              <code className="text-[11px]">AUTH_SECRET</code>. Re-save passwords after rotating that secret.
+            </p>
           {settings.baseUrl.includes("localhost") && !errors.baseUrl && (
             <p className="mt-3 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
               Open/click tracking will not work for recipients while Base URL is localhost.

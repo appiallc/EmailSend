@@ -38,6 +38,8 @@ model Campaign {
   id               String                @id @default(cuid())
   name             String
   subject          String
+  subjectB         String                @default("")
+  abTesting        Boolean               @default(false)
   bodyHtml         String
   followUpSubject  String                @default("")
   followUpBodyHtml String                @default("")
@@ -63,29 +65,33 @@ model CampaignContactList {
 }
 
 model EmailLog {
-  id          String    @id @default(cuid())
-  campaignId  String
-  contactId   String
-  type        String    // initial | followup
-  followUpStep Int      @default(0) // 0 = initial; 1+ = follow-up sequence
-  status       String    @default("pending") // pending | sent | failed | opened | clicked | replied | bounced
-  trackingId   String    @unique @default(cuid())
-  messageId    String?
-  error        String?
-  sentAt       DateTime?
-  openedAt     DateTime?
-  clickedAt    DateTime?
-  repliedAt    DateTime?
-  bouncedAt    DateTime?
-  bounceReason String?
-  bounceType   String?   // HARD_BOUNCE | SOFT_BOUNCE
-  followUpDue  DateTime?
-  campaign    Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
-  contact     Contact   @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  id             String    @id @default(cuid())
+  campaignId     String
+  contactId      String
+  type           String // initial | followup
+  followUpStep   Int       @default(0) // 0 = initial; 1+ = follow-up sequence
+  status         String    @default("pending") // pending | sent | failed | opened | clicked | replied | bounced
+  trackingId     String    @unique @default(cuid())
+  messageId      String?
+  error          String?
+  subjectVariant String? // A | B when campaign A/B is on
+  retryCount     Int       @default(0)
+  retryAt        DateTime?
+  sentAt         DateTime?
+  openedAt       DateTime?
+  clickedAt      DateTime?
+  repliedAt      DateTime?
+  bouncedAt      DateTime?
+  bounceReason   String?
+  bounceType     String? // HARD_BOUNCE | SOFT_BOUNCE
+  followUpDue    DateTime?
+  campaign       Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  contact        Contact   @relation(fields: [contactId], references: [id], onDelete: Cascade)
 
   @@index([campaignId])
   @@index([contactId])
   @@index([followUpDue])
+  @@index([status, retryAt])
 }
 
 model Settings {
@@ -103,6 +109,8 @@ model Settings {
   imapUser       String  @default("")
   imapPass       String  @default("")
   baseUrl        String  @default("http://localhost:3000")
+  /** Delay between outbound SMTP sends (ms). 0 = no throttle. */
+  sendDelayMs    Int     @default(500)
 }
 
 /** Global do-not-email list (unsubscribe, hard bounce, manual). */
@@ -114,4 +122,17 @@ model SuppressedEmail {
   createdAt DateTime @default(now())
 
   @@index([createdAt])
+}
+
+/** Reusable email compose templates. */
+model EmailTemplate {
+  id        String   @id @default(cuid())
+  name      String
+  subject   String
+  bodyHtml  String
+  kind      String   @default("initial") // initial | followup
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([kind])
 }

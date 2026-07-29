@@ -7,10 +7,25 @@ import {
   getFollowUpSteps,
 } from "./follow-ups";
 import { getSuppressedEmailSet, normalizeEmail } from "./suppression";
+import {
+  normalizeSendDelayMs,
+  sleep,
+  SOFT_BOUNCE_MAX_RETRIES,
+} from "./deliverability";
 import type { Contact } from "@prisma/client";
 
 /** Max emails to send per outbound worker run (avoids HTTP/cron timeouts). */
 export const SEND_BATCH_LIMIT = 25;
+
+function pickSubject(
+  campaign: { subject: string; subjectB: string; abTesting: boolean },
+  variant: string | null | undefined
+): string {
+  if (campaign.abTesting && campaign.subjectB.trim() && variant === "B") {
+    return campaign.subjectB;
+  }
+  return campaign.subject;
+}
 
 async function scheduleNextFollowUp(
   campaignId: string,
@@ -55,6 +70,7 @@ export async function sendCampaignEmails(
 
   const settings = await getSettings();
   const limit = opts?.limit ?? SEND_BATCH_LIMIT;
+  const delayMs = normalizeSendDelayMs(settings.sendDelayMs);
 
   const logs = await prisma.emailLog.findMany({
     where: { campaignId, type, status: "pending" },
@@ -103,7 +119,7 @@ export async function sendCampaignEmails(
       let bodyHtml: string;
 
       if (type === "initial") {
-        subject = campaign.subject;
+        subject = pickSubject(campaign, log.subjectVariant);
         bodyHtml = campaign.bodyHtml;
       } else {
         const step = log.followUpStep || 1;
@@ -111,8 +127,13 @@ export async function sendCampaignEmails(
         if (!stepConfig) {
           throw new Error(`Missing follow-up step ${step}`);
         }
-        const cleanSubject = campaign.subject.trim();
-        subject = /^re:/i.test(cleanSubject) ? cleanSubject : `Re: ${cleanSubject}`;
+        const stepSubject = stepConfig.subject.trim();
+        if (stepSubject) {
+          subject = stepSubject;
+        } else {
+          const base = pickSubject(campaign, log.subjectVariant).trim();
+          subject = /^re:/i.test(base) ? base : `Re: ${base}`;
+        }
         bodyHtml = stepConfig.bodyHtml;
       }
 
@@ -177,6 +198,11 @@ export async function sendCampaignEmails(
           sentAt,
           messageId: result.messageId,
           followUpDue: type === "initial" ? followUpDue : null,
+          bounceReason: null,
+          bounceType: null,
+          bouncedAt: null,
+          retryAt: null,
+          error: null,
         },
       });
 
@@ -185,6 +211,9 @@ export async function sendCampaignEmails(
       }
 
       sent++;
+      if (delayMs > 0) {
+        await sleep(delayMs);
+      }
     } catch (err) {
       await prisma.emailLog.update({
         where: { id: log.id },
@@ -210,6 +239,55 @@ export async function sendCampaignEmails(
   }
 
   return { sent, failed, skipped, total: logs.length };
+}
+
+/** Re-queue soft-bounced logs whose retry window is due. */
+export async function processSoftBounceRetries(limit = SEND_BATCH_LIMIT) {
+  const now = new Date();
+  const due = await prisma.emailLog.findMany({
+    where: {
+      status: "bounced",
+      bounceType: "SOFT_BOUNCE",
+      retryAt: { lte: now },
+      retryCount: { lt: SOFT_BOUNCE_MAX_RETRIES },
+      campaign: { status: { not: "paused" } },
+    },
+    take: limit,
+    orderBy: { retryAt: "asc" },
+  });
+
+  let requeued = 0;
+  for (const log of due) {
+    await prisma.emailLog.update({
+      where: { id: log.id },
+      data: {
+        status: "pending",
+        retryCount: log.retryCount + 1,
+        retryAt: null,
+        bounceReason: null,
+        bounceType: null,
+        bouncedAt: null,
+        messageId: null,
+        sentAt: null,
+        openedAt: null,
+        clickedAt: null,
+        error: `Soft bounce retry #${log.retryCount + 1}`,
+      },
+    });
+
+    if (log.type === "initial") {
+      await prisma.campaign.updateMany({
+        where: {
+          id: log.campaignId,
+          status: { in: ["sent", "draft"] },
+        },
+        data: { status: "sending" },
+      });
+    }
+    requeued++;
+  }
+
+  return requeued;
 }
 
 /** Mark due scheduled campaigns as sending (send happens in processSendingCampaigns). */
@@ -273,7 +351,11 @@ export async function processSendingCampaigns(): Promise<{
   }
 
   const pendingFollowUpCampaignIds = await prisma.emailLog.findMany({
-    where: { type: "followup", status: "pending" },
+    where: {
+      type: "followup",
+      status: "pending",
+      campaign: { status: { not: "paused" } },
+    },
     select: { campaignId: true },
     distinct: ["campaignId"],
   });
@@ -297,9 +379,10 @@ export async function processSendingCampaigns(): Promise<{
 
 /** Queue due schedules, then drain the send queue. */
 export async function processOutboundQueue() {
+  const softRetries = await processSoftBounceRetries();
   const scheduledQueued = await processDueScheduledCampaigns();
   const drain = await processSendingCampaigns();
-  return { scheduledQueued, ...drain };
+  return { softRetries, scheduledQueued, ...drain };
 }
 
 export async function processDueFollowUps(): Promise<number> {
@@ -310,6 +393,7 @@ export async function processDueFollowUps(): Promise<number> {
       type: "initial",
       status: { in: ["sent", "opened", "clicked"] },
       followUpDue: { lte: now },
+      campaign: { status: { not: "paused" } },
     },
     include: { campaign: true, contact: true },
   });
@@ -393,6 +477,7 @@ export async function processDueFollowUps(): Promise<number> {
         type: "followup",
         followUpStep: nextStep,
         status: "pending",
+        subjectVariant: log.subjectVariant,
       },
     });
     created++;
@@ -410,22 +495,31 @@ export async function createCampaignWithContacts(
     (c) => !suppressed.has(normalizeEmail(c.email))
   );
 
+  const campaign = await prisma.campaign.findUnique({ where: { id: campaignId } });
+  const abOn = !!(campaign?.abTesting && campaign.subjectB.trim());
+
   const existing = await prisma.emailLog.findMany({
     where: { campaignId, type: "initial" },
     select: { contactId: true },
   });
   const existingSet = new Set(existing.map((e) => e.contactId));
+  const existingCount = existing.length;
 
   const toCreate = eligible.filter((c) => !existingSet.has(c.id));
 
   if (toCreate.length > 0) {
     await prisma.emailLog.createMany({
-      data: toCreate.map((c) => ({
+      data: toCreate.map((c, i) => ({
         campaignId,
         contactId: c.id,
         type: "initial",
         followUpStep: 0,
         status: "pending",
+        subjectVariant: abOn
+          ? (existingCount + i) % 2 === 0
+            ? "A"
+            : "B"
+          : null,
       })),
     });
   }

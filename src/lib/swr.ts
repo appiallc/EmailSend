@@ -5,6 +5,7 @@ export const API = {
   suppression: "/api/suppression",
   campaigns: "/api/campaigns",
   contactLists: "/api/contact-lists",
+  templates: "/api/templates",
   contacts: (listId: string) => `/api/contacts?listId=${encodeURIComponent(listId)}`,
 } as const;
 

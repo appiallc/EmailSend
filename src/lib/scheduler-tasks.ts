@@ -64,6 +64,7 @@ export async function runOutboundProcessing() {
   const result = await runTimedTask("Outbound processing", processOutboundQueue);
   if (typeof result === "object" && result && "error" in result) {
     return {
+      softRetries: 0,
       scheduledQueued: 0,
       sent: 0,
       failed: 0,

@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma, getSettings } from "@/lib/db";
 import { PASSWORD_MASK } from "@/lib/password-mask";
+import { encryptSecret } from "@/lib/secrets";
+import { normalizeSendDelayMs } from "@/lib/deliverability";
 
 export async function GET() {
   const settings = await getSettings();
@@ -33,11 +35,15 @@ export async function PUT(request: NextRequest) {
     if (body[f] !== undefined) data[f] = body[f];
   }
 
+  if (body.sendDelayMs !== undefined) {
+    data.sendDelayMs = normalizeSendDelayMs(body.sendDelayMs);
+  }
+
   if (body.smtpPass && body.smtpPass !== PASSWORD_MASK) {
-    data.smtpPass = body.smtpPass;
+    data.smtpPass = encryptSecret(String(body.smtpPass));
   }
   if (body.imapPass && body.imapPass !== PASSWORD_MASK) {
-    data.imapPass = body.imapPass;
+    data.imapPass = encryptSecret(String(body.imapPass));
   }
 
   const settings = await prisma.settings.update({
@@ -45,9 +51,11 @@ export async function PUT(request: NextRequest) {
     data,
   });
 
+  // Return masked + decrypted runtime shape for UI (without leaking ciphertext).
+  const runtime = await getSettings();
   return NextResponse.json({
-    ...settings,
-    smtpPass: settings.smtpPass ? PASSWORD_MASK : "",
-    imapPass: settings.imapPass ? PASSWORD_MASK : "",
+    ...runtime,
+    smtpPass: settings.smtpPass || runtime.smtpPass ? PASSWORD_MASK : "",
+    imapPass: settings.imapPass || runtime.imapPass ? PASSWORD_MASK : "",
   });
 }

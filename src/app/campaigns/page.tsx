@@ -13,9 +13,11 @@ import { AlertBanner } from "@/components/AlertBanner";
 import { CampaignTrackingTable } from "@/components/CampaignTrackingTable";
 import { FollowUpStepsEditor } from "@/components/FollowUpStepsEditor";
 import { EmailPreview } from "@/components/EmailPreview";
+import { HtmlEmailEditor } from "@/components/HtmlEmailEditor";
 import { API } from "@/lib/swr";
 import type { Settings } from "@/lib/settings-validation";
 import type { CampaignEmailLog } from "@/lib/campaign-types";
+import { campaignMetrics } from "@/lib/campaign-types";
 import {
   getFollowUpSteps,
   parseExtraFollowUps,
@@ -33,6 +35,8 @@ interface Campaign {
   id: string;
   name: string;
   subject: string;
+  subjectB?: string;
+  abTesting?: boolean;
   bodyHtml: string;
   followUpSubject: string;
   followUpBodyHtml: string;
@@ -43,6 +47,14 @@ interface Campaign {
   contactListIds: string[];
   contactLists: { id: string; name: string }[];
   emailLogs: CampaignEmailLog[];
+}
+
+interface EmailTemplate {
+  id: string;
+  name: string;
+  subject: string;
+  bodyHtml: string;
+  kind: string;
 }
 
 function toDatetimeLocalValue(date: Date) {
@@ -161,7 +173,9 @@ export default function CampaignsPage() {
   });
   const { data: contactLists } = useSWR<ContactList[]>(API.contactLists);
   const { data: settings } = useSWR<Settings>(API.settings);
+  const { data: templatesData } = useSWR<EmailTemplate[]>(API.templates);
   const emailSignature = settings?.emailSignature ?? "";
+  const templates = templatesData ?? [];
   const [editing, setEditing] = useState<Campaign | null>(null);
   const [sendingId, setSendingId] = useState<string | null>(null);
   const [schedulingId, setSchedulingId] = useState<string | null>(null);
@@ -170,6 +184,17 @@ export default function CampaignsPage() {
   const [message, setMessage] = useState("");
   const [viewing, setViewing] = useState<Campaign | null>(null);
   const [sendSelections, setSendSelections] = useState<Record<string, string[]>>({});
+  const [audiencePreview, setAudiencePreview] = useState<Record<
+    string,
+    {
+      willSendCount: number;
+      uniqueCount: number;
+      duplicateCount: number;
+      suppressedCount: number;
+      rawCount: number;
+    }
+  >>({});
+  const [testingSend, setTestingSend] = useState(false);
 
   const lists = contactLists ?? [];
   const campaignList = campaigns ?? [];
@@ -214,6 +239,8 @@ export default function CampaignsPage() {
       body: JSON.stringify({
         name: `Campaign ${new Date().toLocaleDateString()}`,
         subject: DEFAULT_INITIAL_SUBJECT,
+        subjectB: "",
+        abTesting: false,
         bodyHtml: DEFAULT_INITIAL_BODY,
         followUpSubject: DEFAULT_FOLLOWUP_SUBJECT,
         followUpBodyHtml: DEFAULT_FOLLOWUP_BODY,
@@ -252,6 +279,8 @@ export default function CampaignsPage() {
         id: editing.id,
         name: editing.name,
         subject: editing.subject,
+        subjectB: editing.subjectB || "",
+        abTesting: !!editing.abTesting,
         bodyHtml: editing.bodyHtml,
         followUpSubject: editing.followUpSubject,
         followUpBodyHtml: editing.followUpBodyHtml,
@@ -272,20 +301,51 @@ export default function CampaignsPage() {
 
   const sendCampaign = async (id: string, sendToAll: boolean) => {
     const selected = sendSelections[id] ?? [];
-    const label = sendToAll
-      ? "ALL contacts in ALL lists (duplicates allowed)"
-      : `selected list(s): ${selected.length ? selected.map((lid) => lists.find((l) => l.id === lid)?.name).join(", ") : "none"}`;
 
     if (!sendToAll && selected.length === 0) {
       setMessage("Error: Select at least one contact list, or use Send to All.");
       return;
     }
 
-    if (!confirm(`Send this campaign to ${label}? This cannot be undone.`)) return;
-
     setSendingId(id);
     setMessage("");
     try {
+      const previewRes = await fetch("/api/campaigns/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          campaignId: id,
+          action: "preview",
+          sendToAll,
+          contactListIds: sendToAll ? undefined : selected,
+          allowDuplicates: false,
+        }),
+      });
+      const preview = await previewRes.json();
+      if (!previewRes.ok) {
+        setMessage(`Error: ${preview.error || "Could not preview audience"}`);
+        return;
+      }
+
+      setAudiencePreview((prev) => ({ ...prev, [id]: preview }));
+
+      const dupNote =
+        preview.duplicateCount > 0
+          ? `\n\n${preview.duplicateCount} duplicate email(s) across lists will be skipped (deduped).`
+          : "";
+      const supNote =
+        preview.suppressedCount > 0
+          ? `\n${preview.suppressedCount} suppressed email(s) will be skipped.`
+          : "";
+
+      if (
+        !confirm(
+          `Send to ${preview.willSendCount} unique recipient(s)?${dupNote}${supNote}\n\nThis cannot be undone.`
+        )
+      ) {
+        return;
+      }
+
       const res = await fetch("/api/campaigns/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -294,6 +354,7 @@ export default function CampaignsPage() {
           action: "send",
           sendToAll,
           contactListIds: sendToAll ? undefined : selected,
+          allowDuplicates: false,
         }),
       });
       const data = await res.json();
@@ -317,6 +378,55 @@ export default function CampaignsPage() {
       await Promise.all([refreshCampaigns(), globalMutate(API.stats)]);
     } finally {
       setSendingId(null);
+    }
+  };
+
+  const pauseOrResume = async (id: string, action: "pause" | "resume") => {
+    setSendingId(id);
+    setMessage("");
+    try {
+      const res = await fetch("/api/campaigns/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ campaignId: id, action }),
+      });
+      const data = await res.json();
+      if (data.error) {
+        setMessage(`Error: ${data.error}`);
+      } else {
+        setMessage(
+          action === "pause"
+            ? "Campaign paused successfully. Follow-ups and schedules are halted."
+            : `Campaign resumed (${data.status}).`
+        );
+      }
+      await refreshCampaigns();
+    } finally {
+      setSendingId(null);
+    }
+  };
+
+  const sendTestEmail = async () => {
+    if (!editing) return;
+    setTestingSend(true);
+    setMessage("");
+    try {
+      const res = await fetch("/api/campaigns/test-send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          subject: editing.subject,
+          bodyHtml: editing.bodyHtml,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setMessage(`Error: ${data.error || "Test send failed"}`);
+        return;
+      }
+      setMessage(data.message || "Test email sent successfully.");
+    } finally {
+      setTestingSend(false);
     }
   };
 
@@ -541,19 +651,81 @@ export default function CampaignsPage() {
               />
             </div>
             <div>
-              <label className="block text-sm font-medium mb-1">Initial Email Subject</label>
+              <div className="flex items-center justify-between gap-3 mb-1">
+                <label className="block text-sm font-medium">Initial Email Subject</label>
+                {templates.filter((t) => t.kind === "initial").length > 0 && (
+                  <select
+                    className="text-xs border rounded-lg px-2 py-1 max-w-[220px]"
+                    defaultValue=""
+                    onChange={(e) => {
+                      const t = templates.find((x) => x.id === e.target.value);
+                      if (!t) return;
+                      setEditing({
+                        ...editing,
+                        subject: t.subject,
+                        bodyHtml: t.bodyHtml,
+                      });
+                      e.target.value = "";
+                    }}
+                  >
+                    <option value="">Apply template…</option>
+                    {templates
+                      .filter((t) => t.kind === "initial")
+                      .map((t) => (
+                        <option key={t.id} value={t.id}>
+                          {t.name}
+                        </option>
+                      ))}
+                  </select>
+                )}
+              </div>
               <input
                 className="w-full border rounded-lg px-3 py-2 text-sm"
                 value={editing.subject}
                 onChange={(e) => setEditing({ ...editing, subject: e.target.value })}
               />
+              <label className="mt-3 flex items-center gap-2 text-sm text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={!!editing.abTesting}
+                  onChange={(e) =>
+                    setEditing({ ...editing, abTesting: e.target.checked })
+                  }
+                />
+                A/B test subjects (split recipients 50/50)
+              </label>
+              {editing.abTesting && (
+                <div className="mt-2">
+                  <label className="block text-xs font-medium text-slate-500 mb-1">
+                    Subject B
+                  </label>
+                  <input
+                    className="w-full border rounded-lg px-3 py-2 text-sm"
+                    value={editing.subjectB || ""}
+                    placeholder="Alternate subject line"
+                    onChange={(e) =>
+                      setEditing({ ...editing, subjectB: e.target.value })
+                    }
+                  />
+                </div>
+              )}
             </div>
             <div>
-              <label className="block text-sm font-medium mb-1">Initial Email Body (HTML)</label>
-              <textarea
-                className="w-full border rounded-lg px-3 py-2 text-sm font-mono h-32"
+              <div className="flex items-center justify-between gap-3 mb-1">
+                <label className="block text-sm font-medium">Initial Email Body</label>
+                <button
+                  type="button"
+                  onClick={sendTestEmail}
+                  disabled={testingSend || !editing.bodyHtml.trim()}
+                  className="text-xs font-medium text-blue-600 hover:underline disabled:opacity-50"
+                >
+                  {testingSend ? "Sending test…" : "Send test to me"}
+                </button>
+              </div>
+              <HtmlEmailEditor
+                rows={10}
                 value={editing.bodyHtml}
-                onChange={(e) => setEditing({ ...editing, bodyHtml: e.target.value })}
+                onChange={(html) => setEditing({ ...editing, bodyHtml: html })}
               />
               <EmailPreview
                 label="Initial email preview"
@@ -665,8 +837,27 @@ export default function CampaignsPage() {
                     <span>•</span>
                     <span>{c.emailLogs.length} recipient(s)</span>
                     <span>•</span>
-                    <span className="capitalize">{c.status}</span>
+                    <span
+                      className={`capitalize px-2 py-0.5 rounded-full font-medium ${
+                        c.status === "paused"
+                          ? "bg-orange-100 text-orange-800"
+                          : c.status === "scheduled"
+                            ? "bg-amber-100 text-amber-800"
+                            : c.status === "sending"
+                              ? "bg-blue-100 text-blue-700"
+                              : c.status === "sent"
+                                ? "bg-green-100 text-green-700"
+                                : "bg-slate-100 text-slate-600"
+                      }`}
+                    >
+                      {c.status}
+                    </span>
                   </div>
+                  {c.status === "paused" && (
+                    <p className="mt-2 text-xs text-orange-800 bg-orange-50 border border-orange-200 rounded-lg px-3 py-2 inline-block">
+                      Paused — sends and follow-ups are halted. Resume to continue.
+                    </p>
+                  )}
                   {c.status === "scheduled" && c.scheduledAt && (
                     <p className="mt-2 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 inline-block">
                       {scheduleCountdownLabel(c.scheduledAt, nowTick) ??
@@ -682,6 +873,29 @@ export default function CampaignsPage() {
                         setSendSelections((prev) => ({ ...prev, [c.id]: ids }))
                       }
                     />
+                    {audiencePreview[c.id] && (
+                      <p className="mt-2 text-xs text-slate-500">
+                        Last preview: {audiencePreview[c.id].willSendCount} will send
+                        {audiencePreview[c.id].duplicateCount > 0
+                          ? ` · ${audiencePreview[c.id].duplicateCount} dupes skipped`
+                          : ""}
+                        {audiencePreview[c.id].suppressedCount > 0
+                          ? ` · ${audiencePreview[c.id].suppressedCount} suppressed`
+                          : ""}
+                      </p>
+                    )}
+                    {(() => {
+                      const m = campaignMetrics(c.emailLogs);
+                      return m.sent > 0 ? (
+                        <p className="mt-2 text-xs text-slate-500">
+                          Performance: {m.openRate}% open · {m.replyRate}% reply ·{" "}
+                          {m.bounced} bounced
+                          {c.abTesting && m.variantA.sent + m.variantB.sent > 0
+                            ? ` · A ${m.variantA.openRate}%/${m.variantA.replyRate}% · B ${m.variantB.openRate}%/${m.variantB.replyRate}%`
+                            : ""}
+                        </p>
+                      ) : null;
+                    })()}
                   </div>
                   {schedulingId === c.id && c.status !== "scheduled" && (
                     <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-3">
@@ -792,19 +1006,48 @@ export default function CampaignsPage() {
                       Schedule
                     </button>
                   )}
+                  {c.status === "paused" ? (
+                    <button
+                      onClick={() => pauseOrResume(c.id, "resume")}
+                      disabled={sendingId !== null}
+                      className="px-3 py-1.5 text-xs border border-orange-300 text-orange-800 rounded-lg hover:bg-orange-50 disabled:opacity-50"
+                    >
+                      Resume
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => pauseOrResume(c.id, "pause")}
+                      disabled={
+                        sendingId !== null ||
+                        c.status === "sending" ||
+                        c.status === "draft"
+                      }
+                      className="px-3 py-1.5 text-xs border rounded-lg hover:bg-slate-50 disabled:opacity-50"
+                    >
+                      Pause
+                    </button>
+                  )}
                   <button
                     onClick={() => sendCampaign(c.id, false)}
-                    disabled={sendingId !== null || c.status === "sending"}
+                    disabled={
+                      sendingId !== null ||
+                      c.status === "sending" ||
+                      c.status === "paused"
+                    }
                     className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded-lg disabled:opacity-50"
                   >
                     {sendingId === c.id ? "Sending..." : "Send to Selected"}
                   </button>
                   <button
                     onClick={() => sendCampaign(c.id, true)}
-                    disabled={sendingId !== null || c.status === "sending"}
+                    disabled={
+                      sendingId !== null ||
+                      c.status === "sending" ||
+                      c.status === "paused"
+                    }
                     className="px-3 py-1.5 text-xs border border-blue-200 text-blue-700 rounded-lg hover:bg-blue-50 disabled:opacity-50"
                   >
-                    Send to All
+                    Send to All (deduped)
                   </button>
                 </div>
               </div>

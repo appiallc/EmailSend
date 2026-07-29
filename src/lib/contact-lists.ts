@@ -14,19 +14,19 @@ export async function resolveContactsForSend(options: {
     contacts = await prisma.contact.findMany({
       orderBy: [{ contactListId: "asc" }, { createdAt: "asc" }],
     });
-    return contacts;
+  } else {
+    if (!contactListIds?.length) {
+      return [];
+    }
+
+    contacts = await prisma.contact.findMany({
+      where: { contactListId: { in: contactListIds } },
+      orderBy: [{ contactListId: "asc" }, { createdAt: "asc" }],
+    });
   }
 
-  if (!contactListIds?.length) {
-    return [];
-  }
-
-  contacts = await prisma.contact.findMany({
-    where: { contactListId: { in: contactListIds } },
-    orderBy: [{ contactListId: "asc" }, { createdAt: "asc" }],
-  });
-
-  if (!dedupeByEmail) {
+  // Default: always dedupe by email (safer). Pass dedupeByEmail:false to allow duplicates.
+  if (dedupeByEmail === false) {
     return contacts;
   }
 

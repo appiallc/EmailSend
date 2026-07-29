@@ -9,6 +9,7 @@ import {
   type FollowUpStep,
 } from "@/lib/follow-ups";
 import { EmailPreview } from "@/components/EmailPreview";
+import { HtmlEmailEditor } from "@/components/HtmlEmailEditor";
 
 function followUpLabel(index: number) {
   return index === 0 ? "Follow-up 1 (default)" : `Follow-up ${index + 1}`;
@@ -97,10 +98,10 @@ export function FollowUpStepsEditor({
         </div>
         <div>
           <label className="block text-sm font-medium mb-1">Body (HTML)</label>
-          <textarea
-            className="w-full border rounded-lg px-3 py-2 text-sm font-mono h-28 bg-white"
+          <HtmlEmailEditor
+            rows={7}
             value={followUpBodyHtml}
-            onChange={(e) => onChangeDefault({ followUpBodyHtml: e.target.value })}
+            onChange={(html) => onChangeDefault({ followUpBodyHtml: html })}
           />
           <EmailPreview
             label={`${followUpLabel(0)} preview`}
@@ -154,10 +155,10 @@ export function FollowUpStepsEditor({
           </div>
           <div>
             <label className="block text-sm font-medium mb-1">Body (HTML)</label>
-            <textarea
-              className="w-full border rounded-lg px-3 py-2 text-sm font-mono h-28"
+            <HtmlEmailEditor
+              rows={7}
               value={step.bodyHtml}
-              onChange={(e) => updateExtra(index, { bodyHtml: e.target.value })}
+              onChange={(html) => updateExtra(index, { bodyHtml: html })}
             />
             <EmailPreview
               label={`${followUpLabel(index + 1)} preview`}

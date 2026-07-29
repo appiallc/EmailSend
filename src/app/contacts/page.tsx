@@ -61,12 +61,19 @@ export default function ContactsPage() {
   const [showFormat, setShowFormat] = useState(false);
   const [newListName, setNewListName] = useState("");
   const [viewing, setViewing] = useState<ContactList | null>(null);
+  const [contactSearch, setContactSearch] = useState("");
+  const [listSearch, setListSearch] = useState("");
   const createFileRef = useRef<HTMLInputElement>(null);
   const replaceFileRef = useRef<HTMLInputElement>(null);
   const editFileRef = useRef<HTMLInputElement>(null);
 
   const lists = listsData ?? [];
   const loading = listsLoading && !listsData;
+  const filteredLists = lists.filter((l) =>
+    !listSearch.trim()
+      ? true
+      : l.name.toLowerCase().includes(listSearch.trim().toLowerCase())
+  );
 
   const {
     data: viewContactsData,
@@ -81,6 +88,18 @@ export default function ContactsPage() {
   } = useSWR<Contact[]>(editing ? API.contacts(editing.id) : null);
 
   const viewContacts = viewContactsData ?? [];
+  const filteredViewContacts = viewContacts.filter((c) => {
+    const q = contactSearch.trim().toLowerCase();
+    if (!q) return true;
+    return (
+      c.email.toLowerCase().includes(q) ||
+      c.firstName.toLowerCase().includes(q) ||
+      c.lastName.toLowerCase().includes(q) ||
+      c.company.toLowerCase().includes(q) ||
+      c.title.toLowerCase().includes(q) ||
+      c.phone.toLowerCase().includes(q)
+    );
+  });
 
   useEffect(() => {
     if (!editing) return;
@@ -733,6 +752,19 @@ export default function ContactsPage() {
           ) : viewContacts.length === 0 ? (
             <p className="p-8 text-center text-slate-500 text-sm">No contacts in this list.</p>
           ) : (
+            <>
+              <div className="px-4 py-3 border-b bg-slate-50/80">
+                <input
+                  type="search"
+                  className="w-full max-w-md border rounded-lg px-3 py-2 text-sm bg-white"
+                  placeholder="Search name, email, company…"
+                  value={contactSearch}
+                  onChange={(e) => setContactSearch(e.target.value)}
+                />
+                <p className="text-xs text-slate-400 mt-1">
+                  Showing {filteredViewContacts.length} of {viewContacts.length}
+                </p>
+              </div>
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-left text-slate-500 border-b bg-slate-50">
@@ -745,7 +777,7 @@ export default function ContactsPage() {
                 </tr>
               </thead>
               <tbody>
-                {viewContacts.map((c) => (
+                {filteredViewContacts.map((c) => (
                   <tr key={c.id} className="border-b border-slate-50 hover:bg-slate-50">
                     <td className="px-4 py-3 font-medium">
                       {[c.firstName, c.lastName].filter(Boolean).join(" ") || "—"}
@@ -766,6 +798,10 @@ export default function ContactsPage() {
                 ))}
               </tbody>
             </table>
+            {filteredViewContacts.length === 0 && (
+              <p className="p-6 text-center text-sm text-slate-500">No contacts match your search.</p>
+            )}
+            </>
           )}
         </div>
       )}
@@ -786,7 +822,20 @@ export default function ContactsPage() {
             </button>
           </div>
         ) : (
-          lists.map((list) => (
+          <>
+            <input
+              type="search"
+              className="w-full max-w-md border rounded-lg px-3 py-2 text-sm bg-white"
+              placeholder="Search contact lists…"
+              value={listSearch}
+              onChange={(e) => setListSearch(e.target.value)}
+            />
+            {filteredLists.length === 0 ? (
+              <p className="text-sm text-slate-500 py-6 text-center">
+                No lists match your search.
+              </p>
+            ) : (
+              filteredLists.map((list) => (
             <div key={list.id} className="bg-white rounded-xl border p-5 shadow-sm">
               <div className="flex items-start justify-between">
                 <div>
@@ -801,6 +850,7 @@ export default function ContactsPage() {
                   <button
                     onClick={() => {
                       setEditing(null);
+                      setContactSearch("");
                       setViewing(list);
                     }}
                     className="px-3 py-1.5 text-xs border rounded-lg hover:bg-slate-50"
@@ -822,7 +872,9 @@ export default function ContactsPage() {
                 </div>
               </div>
             </div>
-          ))
+              ))
+            )}
+          </>
         )}
       </div>
     </div>

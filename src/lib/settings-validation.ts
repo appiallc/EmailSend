@@ -14,6 +14,7 @@ export interface Settings {
   imapUser: string;
   imapPass: string;
   baseUrl: string;
+  sendDelayMs: number;
 }
 
 export type SettingsFieldErrors = Partial<Record<keyof Settings | "smtpSecure", string>>;
@@ -121,6 +122,15 @@ export function validateSettings(settings: Settings): SettingsFieldErrors {
 
     const imapPortError = validatePort(settings.imapPort);
     if (imapPortError) errors.imapPort = imapPortError;
+  }
+
+  if (
+    settings.sendDelayMs !== undefined &&
+    (!Number.isFinite(settings.sendDelayMs) ||
+      settings.sendDelayMs < 0 ||
+      settings.sendDelayMs > 60_000)
+  ) {
+    errors.sendDelayMs = "Send delay must be between 0 and 60000 ms";
   }
 
   return errors;
