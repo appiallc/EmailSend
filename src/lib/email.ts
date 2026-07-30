@@ -1,6 +1,7 @@
 import nodemailer from "nodemailer";
 import type { Contact, Settings } from "@prisma/client";
 import { renderTemplate } from "./templates";
+import { htmlToPlainText } from "./send-preflight";
 
 export function createTransporter(settings: Settings) {
   if (!settings.smtpHost || !settings.smtpUser) {
@@ -130,22 +131,57 @@ export async function sendTrackedEmail(opts: SendEmailOptions) {
   const withUnsub = appendUnsubscribeFooter(bodyWithSignature, baseUrl, opts.trackingId);
   const html = injectTracking(withUnsub, baseUrl, opts.trackingId);
 
-  const messageId = `<${opts.trackingId}@${baseUrl.replace(/^https?:\/\//, "")}>`;
+  // Prefer From-domain for Message-ID so it matches the visible sender (helps clients thread).
+  const fromAddr = (opts.settings.smtpFrom || opts.settings.smtpUser || "").trim();
+  const fromHost = fromAddr.includes("@")
+    ? fromAddr.split("@")[1].replace(/[>:].*$/, "").trim()
+    : "";
+  const baseHost = baseUrl
+    .replace(/^https?:\/\//, "")
+    .replace(/[/:].*$/, "")
+    .replace(/\/$/, "");
+  const messageIdHost = fromHost || baseHost || "localhost";
+  const messageId = `<${opts.trackingId}@${messageIdHost}>`;
+
+  function normalizeMsgId(id: string | undefined | null): string | undefined {
+    if (!id) return undefined;
+    const trimmed = id.trim();
+    if (!trimmed) return undefined;
+    return trimmed.startsWith("<") ? trimmed : `<${trimmed}>`;
+  }
+
+  const inReplyTo = normalizeMsgId(opts.inReplyTo);
+  const references = opts.references
+    ?.split(/\s+/)
+    .map((id) => normalizeMsgId(id))
+    .filter((id): id is string => !!id)
+    .join(" ");
+
+  const text = htmlToPlainText(withUnsub);
+
+  const mailHeaders: Record<string, string> = {
+    "X-Campaign-Tracking-Id": opts.trackingId,
+    "List-Unsubscribe": `<${unsubApiUrl}>, <${unsubPageUrl}>`,
+    "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+  };
+  if (inReplyTo) {
+    mailHeaders["In-Reply-To"] = inReplyTo;
+  }
+  if (references) {
+    mailHeaders["References"] = references;
+  }
 
   const info = await transporter.sendMail({
     from: opts.settings.smtpFrom || opts.settings.smtpUser,
     to: opts.contact.email,
     subject,
+    text: text || subject,
     html,
     messageId,
-    inReplyTo: opts.inReplyTo,
-    references: opts.references,
-    headers: {
-      "X-Campaign-Tracking-Id": opts.trackingId,
-      "List-Unsubscribe": `<${unsubApiUrl}>, <${unsubPageUrl}>`,
-      "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
-    },
+    inReplyTo,
+    references,
+    headers: mailHeaders,
   });
 
-  return { messageId: info.messageId || messageId };
+  return { messageId: normalizeMsgId(info.messageId) || messageId };
 }

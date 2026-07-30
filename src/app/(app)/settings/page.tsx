@@ -21,6 +21,7 @@ export default function SettingsPage() {
   const [message, setMessage] = useState("");
   const [checking, setChecking] = useState(false);
   const [testingSmtp, setTestingSmtp] = useState(false);
+  const [testingImap, setTestingImap] = useState(false);
   const [suppressEmailInput, setSuppressEmailInput] = useState("");
   const [suppressBusy, setSuppressBusy] = useState(false);
 
@@ -150,6 +151,49 @@ export default function SettingsPage() {
     }
   };
 
+  const testImap = async () => {
+    setTestingImap(true);
+    setMessage("");
+    try {
+      if (settings) {
+        const validationErrors = validateSettings(settings);
+        if (Object.keys(validationErrors).length > 0) {
+          setErrors(validationErrors);
+          setMessage("Error: Fix IMAP fields before testing.");
+          return;
+        }
+        const saveRes = await fetch(API.settings, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(settings),
+        });
+        const saved = await saveRes.json();
+        if (!saveRes.ok) {
+          setMessage(`Error: ${saved.error || "Could not save settings before test"}`);
+          return;
+        }
+        setSettings(saved);
+        await mutate(saved, { revalidate: false });
+      }
+
+      const res = await fetch(API.settingsTestImap, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) {
+        setMessage(`Error: ${data.error || "IMAP test failed"}`);
+        await mutate();
+        return;
+      }
+      setMessage(data.message || "IMAP connection successful.");
+      await mutate();
+    } catch (err) {
+      setMessage(
+        `Error: ${err instanceof Error ? err.message : "IMAP test failed"}`
+      );
+    } finally {
+      setTestingImap(false);
+    }
+  };
+
   const addSuppressed = async () => {
     const email = suppressEmailInput.trim();
     if (!email) return;
@@ -237,10 +281,83 @@ export default function SettingsPage() {
               hint="Throttles SMTP sends (0–60000). Soft bounces auto-retry up to 3 times (1h / 6h / 24h)."
               onChange={(v) => update("sendDelayMs", parseInt(v, 10) || 0)}
             />
+            <p className="text-xs text-slate-600 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+              For inbox placement, publish SPF, DKIM, and DMARC for your sending domain
+              (e.g. appia.in) in DNS. Zoho documents this under email authentication —
+              the app cannot set DNS for you.
+            </p>
+          </div>
+        </section>
+
+        <section className="bg-white rounded-xl border p-6 shadow-sm">
+          <h2 className="font-semibold mb-1">Deliverability</h2>
+          <p className="text-xs text-slate-400 mb-4">
+            Limits and send windows reduce spam risk on a single mailbox. Follow-up
+            times use this timezone.
+          </p>
+          <div className="space-y-4">
+            <FormField
+              id="timezone"
+              label="Timezone"
+              value={settings.timezone ?? "Asia/Kolkata"}
+              error={errors.timezone}
+              hint="IANA name, e.g. Asia/Kolkata"
+              onChange={(v) => update("timezone", v)}
+            />
+            <div className="grid grid-cols-2 gap-4">
+              <FormField
+                id="sendWindowStart"
+                label="Send window start"
+                value={settings.sendWindowStart ?? "09:00"}
+                error={errors.sendWindowStart}
+                hint="HH:mm local"
+                onChange={(v) => update("sendWindowStart", v)}
+              />
+              <FormField
+                id="sendWindowEnd"
+                label="Send window end"
+                value={settings.sendWindowEnd ?? "17:00"}
+                error={errors.sendWindowEnd}
+                hint="HH:mm local"
+                onChange={(v) => update("sendWindowEnd", v)}
+              />
+            </div>
+            <label className="flex items-center gap-2 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                checked={settings.businessDaysOnly !== false}
+                onChange={(e) => update("businessDaysOnly", e.target.checked)}
+              />
+              Send only on business days (Mon–Fri); roll weekends forward
+            </label>
+            <FormField
+              id="dailySendLimit"
+              label="Daily send limit"
+              type="number"
+              value={settings.dailySendLimit ?? 100}
+              error={errors.dailySendLimit}
+              hint="0 = unlimited. Remaining recipients stay queued for later days."
+              onChange={(v) => update("dailySendLimit", parseInt(v, 10) || 0)}
+            />
+            <FormField
+              id="bouncePausePercent"
+              label="Auto-pause on hard bounce %"
+              type="number"
+              value={settings.bouncePausePercent ?? 5}
+              error={errors.bouncePausePercent}
+              hint="Pause campaign when hard-bounce rate exceeds this (0 = off). Needs ≥10 sends."
+              onChange={(v) => update("bouncePausePercent", parseInt(v, 10) || 0)}
+            />
+          </div>
+        </section>
+
+        <section className="bg-white rounded-xl border p-6 shadow-sm">
+          <h2 className="font-semibold mb-4">Email Signature</h2>
+          <div className="space-y-4">
             <div>
               <div className="flex items-center justify-between gap-3 mb-1">
                 <label htmlFor="emailSignature" className="block text-sm font-medium">
-                  Email Signature
+                  Signature HTML
                 </label>
                 <button
                   type="button"
@@ -473,6 +590,27 @@ export default function SettingsPage() {
               />
             </div>
           </div>
+          {settings.lastReplyCheckError ? (
+            <p className="mt-3 text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+              Last IMAP error: {settings.lastReplyCheckError}
+              {settings.lastReplyCheckAt
+                ? ` (${new Date(settings.lastReplyCheckAt).toLocaleString()})`
+                : ""}
+            </p>
+          ) : settings.lastReplyCheckAt ? (
+            <p className="mt-3 text-xs text-emerald-700">
+              Last reply check OK at{" "}
+              {new Date(settings.lastReplyCheckAt).toLocaleString()}
+            </p>
+          ) : null}
+          <button
+            type="button"
+            onClick={testImap}
+            disabled={testingImap}
+            className="mt-4 px-4 py-2 text-sm border rounded-lg hover:bg-slate-50 disabled:opacity-50"
+          >
+            {testingImap ? "Testing IMAP…" : "Test IMAP connection"}
+          </button>
         </section>
 
         <section className="bg-white rounded-xl border p-6 shadow-sm">
@@ -490,6 +628,31 @@ export default function SettingsPage() {
             . Local <code className="text-[11px]">npm run dev</code> also runs them
             in-process.
           </p>
+          <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600 space-y-2">
+            <p className="font-medium text-slate-700">Health</p>
+            <p>
+              Last outbound:{" "}
+              {settings.lastOutboundAt
+                ? new Date(settings.lastOutboundAt).toLocaleString()
+                : "never"}
+              {settings.lastOutboundError
+                ? ` — error: ${settings.lastOutboundError}`
+                : settings.lastOutboundAt
+                  ? " — OK"
+                  : ""}
+            </p>
+            <p>
+              Last reply check:{" "}
+              {settings.lastReplyCheckAt
+                ? new Date(settings.lastReplyCheckAt).toLocaleString()
+                : "never"}
+              {settings.lastReplyCheckError
+                ? ` — error: ${settings.lastReplyCheckError}`
+                : settings.lastReplyCheckAt
+                  ? " — OK"
+                  : ""}
+            </p>
+          </div>
           <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600 space-y-3">
             <p className="font-medium text-slate-700">
               Create these two jobs on cron-job.org

@@ -44,6 +44,8 @@ model Campaign {
   followUpSubject  String                @default("")
   followUpBodyHtml String                @default("")
   followUpDays     Int                   @default(7)
+  /** Local time-of-day for the default follow-up step (HH:mm). */
+  followUpTimeOfDay String               @default("10:00")
   extraFollowUps   Json                  @default("[]")
   status           String                @default("draft") // draft | scheduled | sending | sent | paused
   createdAt        DateTime              @default(now())
@@ -111,6 +113,22 @@ model Settings {
   baseUrl        String  @default("http://localhost:3000")
   /** Delay between outbound SMTP sends (ms). 0 = no throttle. */
   sendDelayMs    Int     @default(500)
+  /** IANA timezone for schedule/follow-up local times. */
+  timezone           String  @default("Asia/Kolkata")
+  /** When true, roll sends/follow-ups forward off weekends. */
+  businessDaysOnly   Boolean @default(true)
+  /** Inclusive local send window start (HH:mm). */
+  sendWindowStart    String  @default("09:00")
+  /** Exclusive local send window end (HH:mm). */
+  sendWindowEnd      String  @default("17:00")
+  /** Max successful SMTP sends per calendar day in timezone (0 = unlimited). */
+  dailySendLimit     Int     @default(100)
+  /** Soft-pause campaign when hard-bounce rate exceeds this percent (0 = off). */
+  bouncePausePercent Int     @default(5)
+  lastOutboundAt       DateTime?
+  lastOutboundError    String     @default("")
+  lastReplyCheckAt     DateTime?
+  lastReplyCheckError  String     @default("")
 }
 
 /** Global do-not-email list (unsubscribe, hard bounce, manual). */

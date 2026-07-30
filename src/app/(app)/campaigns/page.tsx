@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import useSWR, { mutate as globalMutate } from "swr";
 import {
   DEFAULT_FOLLOWUP_BODY,
@@ -14,6 +14,7 @@ import { CampaignTrackingTable } from "@/components/CampaignTrackingTable";
 import { FollowUpStepsEditor } from "@/components/FollowUpStepsEditor";
 import { EmailPreview } from "@/components/EmailPreview";
 import { HtmlEmailEditor } from "@/components/HtmlEmailEditor";
+import { ConfirmModal } from "@/components/ConfirmModal";
 import { API } from "@/lib/swr";
 import type { Settings } from "@/lib/settings-validation";
 import type { CampaignEmailLog } from "@/lib/campaign-types";
@@ -24,6 +25,13 @@ import {
   validateCampaignFollowUps,
   type FollowUpStep,
 } from "@/lib/follow-ups";
+import { buildSendPreflight, scoreEmailContent } from "@/lib/send-preflight";
+import {
+  formatRiskLabel,
+  getRiskySendReasons,
+  nextMondayMorning,
+  findFollowUpsBeforeInitial,
+} from "@/lib/send-time";
 
 interface ContactList {
   id: string;
@@ -41,6 +49,7 @@ interface Campaign {
   followUpSubject: string;
   followUpBodyHtml: string;
   followUpDays: number;
+  followUpTimeOfDay?: string;
   extraFollowUps?: FollowUpStep[] | unknown;
   status: string;
   scheduledAt?: string | null;
@@ -108,6 +117,24 @@ function scheduleCountdownLabel(localOrIso: string, nowMs = Date.now()) {
     return `Will send now (${when})`;
   }
   return `Will be sent on ${when} — in ${until}`;
+}
+
+function describeFollowUpConflicts(
+  conflicts: ReturnType<typeof findFollowUpsBeforeInitial>,
+  initialAt: Date,
+  timeZone?: string | null
+): string {
+  const initialLabel = formatRiskLabel(initialAt, timeZone);
+  const lines = conflicts.map((c) => {
+    const dueLabel = formatRiskLabel(c.projectedDue, timeZone);
+    return `• Follow-up ${c.stepIndex}: ${c.days} day(s) at ${c.timeOfDay} → ${dueLabel}`;
+  });
+  return (
+    `Initial send: ${initialLabel}\n\n` +
+    `These follow-up times are at or before the initial send, so they would fire almost immediately after send instead of waiting:\n` +
+    `${lines.join("\n")}\n\n` +
+    `Edit the campaign and set each follow-up time to after the initial send, then try again.`
+  );
 }
 
 function ContactListPicker({
@@ -195,6 +222,30 @@ export default function CampaignsPage() {
     }
   >>({});
   const [testingSend, setTestingSend] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmTitle, setConfirmTitle] = useState("");
+  const [confirmBody, setConfirmBody] = useState<ReactNode>("");
+  const [confirmChecklist, setConfirmChecklist] = useState<
+    { severity: "ok" | "warning" | "error"; label: string; detail?: string }[]
+  >([]);
+  const [confirmActions, setConfirmActions] = useState<
+    { label: string; onClick: () => void; variant?: "primary" | "secondary" | "danger" | "ghost" }[]
+  >([]);
+
+  const closeConfirm = () => setConfirmOpen(false);
+
+  const openConfirm = (opts: {
+    title: string;
+    body: React.ReactNode;
+    checklist?: typeof confirmChecklist;
+    actions: typeof confirmActions;
+  }) => {
+    setConfirmTitle(opts.title);
+    setConfirmBody(opts.body);
+    setConfirmChecklist(opts.checklist ?? []);
+    setConfirmActions(opts.actions);
+    setConfirmOpen(true);
+  };
 
   const lists = contactLists ?? [];
   const campaignList = campaigns ?? [];
@@ -245,6 +296,7 @@ export default function CampaignsPage() {
         followUpSubject: DEFAULT_FOLLOWUP_SUBJECT,
         followUpBodyHtml: DEFAULT_FOLLOWUP_BODY,
         followUpDays: 7,
+        followUpTimeOfDay: "10:00",
         extraFollowUps: [],
         contactListIds: [],
       }),
@@ -252,6 +304,7 @@ export default function CampaignsPage() {
     const campaign = await res.json();
     setEditing({
       ...campaign,
+      followUpTimeOfDay: campaign.followUpTimeOfDay || "10:00",
       extraFollowUps: parseExtraFollowUps(campaign.extraFollowUps),
     });
     await mutateCampaigns();
@@ -263,6 +316,7 @@ export default function CampaignsPage() {
     const extraFollowUps = parseExtraFollowUps(editing.extraFollowUps);
     const validationError = validateCampaignFollowUps({
       followUpDays: editing.followUpDays,
+      followUpTimeOfDay: editing.followUpTimeOfDay,
       followUpSubject: editing.followUpSubject,
       followUpBodyHtml: editing.followUpBodyHtml,
       extraFollowUps,
@@ -285,6 +339,7 @@ export default function CampaignsPage() {
         followUpSubject: editing.followUpSubject,
         followUpBodyHtml: editing.followUpBodyHtml,
         followUpDays: editing.followUpDays,
+        followUpTimeOfDay: editing.followUpTimeOfDay || "10:00",
         extraFollowUps,
         contactListIds: editing.contactListIds,
       }),
@@ -294,13 +349,56 @@ export default function CampaignsPage() {
       setMessage(`Error: ${data.error}`);
       return;
     }
+
+    const wasSent = editing.status === "sent" || editing.status === "paused";
+    const steps = getFollowUpSteps({
+      followUpDays: editing.followUpDays,
+      followUpTimeOfDay: editing.followUpTimeOfDay,
+      followUpSubject: editing.followUpSubject,
+      followUpBodyHtml: editing.followUpBodyHtml,
+      extraFollowUps,
+    });
+
     setMessage("Campaign saved successfully.");
     setEditing(null);
     await mutateCampaigns();
+
+    if (wasSent && steps.length > 1) {
+      openConfirm({
+        title: "Queue new follow-up?",
+        body: `You saved ${steps.length} follow-up step(s) on a campaign that already sent. Queue the latest step for non-repliers on the same list?`,
+        actions: [
+          { label: "Not now", variant: "ghost", onClick: closeConfirm },
+          {
+            label: "Queue for non-repliers",
+            variant: "primary",
+            onClick: async () => {
+              closeConfirm();
+              const qRes = await fetch("/api/campaigns/send", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  campaignId: editing.id,
+                  action: "queue-late-follow-up",
+                }),
+              });
+              const qData = await qRes.json();
+              if (!qRes.ok) {
+                setMessage(`Error: ${qData.error || "Could not queue follow-up"}`);
+              } else {
+                setMessage(qData.message || `Queued ${qData.queued} contact(s).`);
+                await refreshCampaigns();
+              }
+            },
+          },
+        ],
+      });
+    }
   };
 
   const sendCampaign = async (id: string, sendToAll: boolean) => {
     const selected = sendSelections[id] ?? [];
+    const campaign = campaignList.find((c) => c.id === id);
 
     if (!sendToAll && selected.length === 0) {
       setMessage("Error: Select at least one contact list, or use Send to All.");
@@ -329,53 +427,157 @@ export default function CampaignsPage() {
 
       setAudiencePreview((prev) => ({ ...prev, [id]: preview }));
 
-      const dupNote =
-        preview.duplicateCount > 0
-          ? `\n\n${preview.duplicateCount} duplicate email(s) across lists will be skipped (deduped).`
-          : "";
-      const supNote =
-        preview.suppressedCount > 0
-          ? `\n${preview.suppressedCount} suppressed email(s) will be skipped.`
-          : "";
-
-      if (
-        !confirm(
-          `Send to ${preview.willSendCount} unique recipient(s)?${dupNote}${supNote}\n\nThis cannot be undone.`
-        )
-      ) {
+      const steps = campaign
+        ? getFollowUpSteps({
+            followUpDays: campaign.followUpDays,
+            followUpTimeOfDay: campaign.followUpTimeOfDay,
+            followUpSubject: campaign.followUpSubject,
+            followUpBodyHtml: campaign.followUpBodyHtml,
+            extraFollowUps: campaign.extraFollowUps,
+          })
+        : [];
+      const fuConflicts = findFollowUpsBeforeInitial({
+        initialAt: new Date(),
+        steps,
+        timezone: settings?.timezone,
+      });
+      if (fuConflicts.length > 0) {
+        openConfirm({
+          title: "Change follow-up times",
+          body: describeFollowUpConflicts(
+            fuConflicts,
+            new Date(),
+            settings?.timezone
+          ),
+          actions: [
+            {
+              label: "Edit campaign",
+              variant: "primary",
+              onClick: () => {
+                closeConfirm();
+                if (campaign) {
+                  setEditing({
+                    ...campaign,
+                    followUpTimeOfDay: campaign.followUpTimeOfDay || "10:00",
+                    extraFollowUps: parseExtraFollowUps(campaign.extraFollowUps),
+                  });
+                }
+              },
+            },
+            { label: "Cancel", variant: "ghost", onClick: closeConfirm },
+          ],
+        });
         return;
       }
 
-      const res = await fetch("/api/campaigns/send", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          campaignId: id,
-          action: "send",
-          sendToAll,
-          contactListIds: sendToAll ? undefined : selected,
-          allowDuplicates: false,
-        }),
+      const preflight = buildSendPreflight({
+        subject: campaign?.subject || "",
+        bodyHtml: campaign?.bodyHtml || "",
+        recipientCount: preview.willSendCount,
+        dailySendLimit: settings?.dailySendLimit ?? 100,
+        imapConfigured: !!(settings?.imapHost && settings?.imapUser),
+        imapHealthy: settings?.lastReplyCheckError
+          ? false
+          : settings?.imapHost
+            ? null
+            : null,
       });
-      const data = await res.json();
-      if (data.error) {
-        setMessage(`Error: ${data.error}`);
-      } else if (data.queued) {
-        setMessage(
-          `Campaign queued successfully — ${data.recipients} recipient(s) sending in the background.${
-            data.suppressed
-              ? ` ${data.suppressed} suppressed email(s) skipped.`
-              : ""
-          }`
-        );
-      } else {
-        setMessage(
-          `Campaign sent successfully — ${data.sent} email(s) to ${data.recipients} recipient(s).${
-            data.failed ? ` ${data.failed} failed.` : ""
-          }`
-        );
-      }
-      await Promise.all([refreshCampaigns(), globalMutate(API.stats)]);
+
+      const riskNow = getRiskySendReasons(new Date(), {
+        timezone: settings?.timezone,
+        sendWindowStart: settings?.sendWindowStart,
+        sendWindowEnd: settings?.sendWindowEnd,
+      });
+
+      const runSend = async () => {
+        closeConfirm();
+        setSendingId(id);
+        try {
+          const res = await fetch("/api/campaigns/send", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              campaignId: id,
+              action: "send",
+              sendToAll,
+              contactListIds: sendToAll ? undefined : selected,
+              allowDuplicates: false,
+            }),
+          });
+          const data = await res.json();
+          if (data.error) {
+            setMessage(`Error: ${data.error}`);
+          } else if (data.queued) {
+            setMessage(
+              `Campaign queued successfully — ${data.recipients} recipient(s) sending in the background.${
+                data.suppressed
+                  ? ` ${data.suppressed} suppressed email(s) skipped.`
+                  : ""
+              }`
+            );
+          } else {
+            setMessage(
+              `Campaign sent successfully — ${data.sent} email(s) to ${data.recipients} recipient(s).${
+                data.failed ? ` ${data.failed} failed.` : ""
+              }`
+            );
+          }
+          await Promise.all([refreshCampaigns(), globalMutate(API.stats)]);
+        } finally {
+          setSendingId(null);
+        }
+      };
+
+      const riskNote =
+        riskNow.length > 0
+          ? `\n\nWarning: sending now lands on ${formatRiskLabel(new Date(), settings?.timezone)} (${riskNow.join(", ")}). Weekend/off-hours sends often hurt inbox placement.`
+          : "";
+
+      openConfirm({
+        title: "Send campaign?",
+        body: `Send to ${preview.willSendCount} unique recipient(s)?${
+          preview.duplicateCount > 0
+            ? `\n${preview.duplicateCount} duplicate email(s) across lists will be skipped.`
+            : ""
+        }${
+          preview.suppressedCount > 0
+            ? `\n${preview.suppressedCount} suppressed email(s) will be skipped.`
+            : ""
+        }${riskNote}\n\nThis cannot be undone.`,
+        checklist: preflight.items,
+        actions: [
+          { label: "Cancel", variant: "ghost", onClick: closeConfirm },
+          ...(riskNow.includes("weekend")
+            ? [
+                {
+                  label: "Move to Monday 10:00",
+                  variant: "secondary" as const,
+                  onClick: () => {
+                    closeConfirm();
+                    const monday = nextMondayMorning(
+                      new Date(),
+                      settings?.timezone,
+                      "10:00"
+                    );
+                    setScheduleDrafts((prev) => ({
+                      ...prev,
+                      [id]: toDatetimeLocalValue(monday),
+                    }));
+                    setSchedulingId(id);
+                    setMessage(
+                      `Schedule picker opened for Monday ${formatScheduledAt(monday.toISOString())}. Confirm schedule when ready.`
+                    );
+                  },
+                },
+              ]
+            : []),
+          {
+            label: preflight.blocking ? "Fix issues first" : "Send now",
+            variant: preflight.blocking ? "secondary" : "primary",
+            onClick: preflight.blocking ? closeConfirm : runSend,
+          },
+        ],
+      });
     } finally {
       setSendingId(null);
     }
@@ -440,6 +642,7 @@ export default function CampaignsPage() {
 
   const scheduleCampaign = async (id: string, sendToAll: boolean) => {
     const selected = sendSelections[id] ?? [];
+    const campaign = campaignList.find((c) => c.id === id);
     const localValue = scheduleDrafts[id] || defaultScheduleLocalValue();
     const when = new Date(localValue);
 
@@ -460,82 +663,240 @@ export default function CampaignsPage() {
       ? "ALL contacts"
       : selected.map((lid) => lists.find((l) => l.id === lid)?.name).join(", ");
 
-    if (
-      !confirm(
-        `Schedule this campaign for ${formatScheduledAt(when.toISOString())} to ${label}?`
-      )
-    ) {
+    const risks = getRiskySendReasons(when, {
+      timezone: settings?.timezone,
+      sendWindowStart: settings?.sendWindowStart,
+      sendWindowEnd: settings?.sendWindowEnd,
+    });
+
+    const previewRes = await fetch("/api/campaigns/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        campaignId: id,
+        action: "preview",
+        sendToAll,
+        contactListIds: sendToAll ? undefined : selected,
+        allowDuplicates: false,
+      }),
+    });
+    const preview = await previewRes.json().catch(() => ({ willSendCount: 0 }));
+    const preflight = buildSendPreflight({
+      subject: campaign?.subject || "",
+      bodyHtml: campaign?.bodyHtml || "",
+      recipientCount: preview.willSendCount || 0,
+      dailySendLimit: settings?.dailySendLimit ?? 100,
+      imapConfigured: !!(settings?.imapHost && settings?.imapUser),
+      imapHealthy: settings?.lastReplyCheckError ? false : null,
+    });
+
+    const doSchedule = async (at: Date) => {
+      closeConfirm();
+      setSendingId(id);
+      setMessage("");
+      try {
+        const res = await fetch("/api/campaigns/send", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            campaignId: id,
+            action: "schedule",
+            scheduledAt: at.toISOString(),
+            sendToAll,
+            contactListIds: sendToAll ? undefined : selected,
+          }),
+        });
+        const data = await res.json();
+        if (data.error) {
+          setMessage(`Error: ${data.error}`);
+        } else {
+          setMessage(
+            `Successfully scheduled for ${formatScheduledAt(data.scheduledAt)} — ${data.recipients} recipient(s).`
+          );
+          setSchedulingId(null);
+        }
+        await Promise.all([refreshCampaigns(), globalMutate(API.stats)]);
+      } finally {
+        setSendingId(null);
+      }
+    };
+
+    const monday = nextMondayMorning(when, settings?.timezone, "10:00");
+    const steps = campaign
+      ? getFollowUpSteps({
+          followUpDays: campaign.followUpDays,
+          followUpTimeOfDay: campaign.followUpTimeOfDay,
+          followUpSubject: campaign.followUpSubject,
+          followUpBodyHtml: campaign.followUpBodyHtml,
+          extraFollowUps: campaign.extraFollowUps,
+        })
+      : [];
+
+    const earlyConflicts = findFollowUpsBeforeInitial({
+      initialAt: when,
+      steps,
+      timezone: settings?.timezone,
+    });
+    if (earlyConflicts.length > 0) {
+      openConfirm({
+        title: "Change follow-up times",
+        body: describeFollowUpConflicts(earlyConflicts, when, settings?.timezone),
+        actions: [
+          {
+            label: "Edit campaign",
+            variant: "primary",
+            onClick: () => {
+              closeConfirm();
+              setSchedulingId(null);
+              if (campaign) {
+                setEditing({
+                  ...campaign,
+                  followUpTimeOfDay: campaign.followUpTimeOfDay || "10:00",
+                  extraFollowUps: parseExtraFollowUps(campaign.extraFollowUps),
+                });
+              }
+            },
+          },
+          { label: "Cancel", variant: "ghost", onClick: closeConfirm },
+        ],
+      });
       return;
     }
 
-    setSendingId(id);
-    setMessage("");
-    try {
-      const res = await fetch("/api/campaigns/send", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          campaignId: id,
-          action: "schedule",
-          scheduledAt: when.toISOString(),
-          sendToAll,
-          contactListIds: sendToAll ? undefined : selected,
-        }),
+    const checkFuThenSchedule = (at: Date) => {
+      const conflicts = findFollowUpsBeforeInitial({
+        initialAt: at,
+        steps,
+        timezone: settings?.timezone,
       });
-      const data = await res.json();
-      if (data.error) {
-        setMessage(`Error: ${data.error}`);
-      } else {
-        setMessage(
-          `Successfully scheduled for ${formatScheduledAt(data.scheduledAt)} — ${data.recipients} recipient(s).`
-        );
-        setSchedulingId(null);
+      if (conflicts.length > 0) {
+        openConfirm({
+          title: "Change follow-up times",
+          body: describeFollowUpConflicts(conflicts, at, settings?.timezone),
+          actions: [
+            {
+              label: "Edit campaign",
+              variant: "primary",
+              onClick: () => {
+                closeConfirm();
+                setSchedulingId(null);
+                if (campaign) {
+                  setEditing({
+                    ...campaign,
+                    followUpTimeOfDay: campaign.followUpTimeOfDay || "10:00",
+                    extraFollowUps: parseExtraFollowUps(campaign.extraFollowUps),
+                  });
+                }
+              },
+            },
+            { label: "Cancel", variant: "ghost", onClick: closeConfirm },
+          ],
+        });
+        return;
       }
-      await Promise.all([refreshCampaigns(), globalMutate(API.stats)]);
-    } finally {
-      setSendingId(null);
-    }
+      void doSchedule(at);
+    };
+
+    const riskBody =
+      risks.length > 0
+        ? `This send lands on ${formatRiskLabel(when, settings?.timezone)}. Weekend/off-hours sends often hurt inbox placement. Continue anyway?`
+        : `Schedule this campaign for ${formatScheduledAt(when.toISOString())} to ${label}?`;
+
+    openConfirm({
+      title: risks.length > 0 ? "Risky send time" : "Confirm schedule",
+      body: riskBody,
+      checklist: preflight.items,
+      actions: [
+        { label: "Cancel", variant: "ghost", onClick: closeConfirm },
+        ...(risks.includes("weekend")
+          ? [
+              {
+                label: "Move to Monday 10:00",
+                variant: "secondary" as const,
+                onClick: () => {
+                  setScheduleDrafts((prev) => ({
+                    ...prev,
+                    [id]: toDatetimeLocalValue(monday),
+                  }));
+                  checkFuThenSchedule(monday);
+                },
+              },
+            ]
+          : []),
+        {
+          label: preflight.blocking ? "Fix issues first" : "Continue",
+          variant: preflight.blocking ? "secondary" : "primary",
+          onClick: preflight.blocking
+            ? closeConfirm
+            : () => checkFuThenSchedule(when),
+        },
+      ],
+    });
   };
 
   const cancelSchedule = async (id: string) => {
-    if (!confirm("Cancel the scheduled send for this campaign?")) return;
-    setSendingId(id);
-    setMessage("");
-    try {
-      const res = await fetch("/api/campaigns/send", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ campaignId: id, action: "cancel-schedule" }),
-      });
-      const data = await res.json();
-      if (data.error) {
-        setMessage(`Error: ${data.error}`);
-      } else {
-        setMessage("Scheduled send cancelled successfully.");
-        setSchedulingId(null);
-      }
-      await Promise.all([refreshCampaigns(), globalMutate(API.stats)]);
-    } finally {
-      setSendingId(null);
-    }
+    openConfirm({
+      title: "Cancel schedule?",
+      body: "Cancel the scheduled send for this campaign?",
+      actions: [
+        { label: "Keep schedule", variant: "ghost", onClick: closeConfirm },
+        {
+          label: "Cancel schedule",
+          variant: "danger",
+          onClick: async () => {
+            closeConfirm();
+            setSendingId(id);
+            setMessage("");
+            try {
+              const res = await fetch("/api/campaigns/send", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ campaignId: id, action: "cancel-schedule" }),
+              });
+              const data = await res.json();
+              if (data.error) {
+                setMessage(`Error: ${data.error}`);
+              } else {
+                setMessage("Scheduled send cancelled successfully.");
+                setSchedulingId(null);
+              }
+              await Promise.all([refreshCampaigns(), globalMutate(API.stats)]);
+            } finally {
+              setSendingId(null);
+            }
+          },
+        },
+      ],
+    });
   };
 
   const deleteCampaign = async (id: string) => {
-    if (!confirm("Delete this campaign and all of its email logs? This cannot be undone.")) return;
-    const res = await fetch(`${API.campaigns}?id=${encodeURIComponent(id)}`, {
-      method: "DELETE",
+    openConfirm({
+      title: "Delete campaign?",
+      body: "Delete this campaign and all of its email logs? This cannot be undone.",
+      actions: [
+        { label: "Keep", variant: "ghost", onClick: closeConfirm },
+        {
+          label: "Delete",
+          variant: "danger",
+          onClick: async () => {
+            closeConfirm();
+            const res = await fetch(`${API.campaigns}?id=${encodeURIComponent(id)}`, {
+              method: "DELETE",
+            });
+            const data = await res.json();
+            if (data.error) {
+              setMessage(`Error: ${data.error}`);
+            } else {
+              setMessage("Campaign deleted successfully.");
+              if (viewing?.id === id) setViewing(null);
+              if (editing?.id === id) setEditing(null);
+              await mutateCampaigns();
+            }
+          },
+        },
+      ],
     });
-    const data = await res.json();
-
-    if (data.error) {
-      setMessage(`Error: ${data.error}`);
-      return;
-    }
-
-    setMessage("Campaign deleted successfully.");
-    if (editing?.id === id) setEditing(null);
-    if (viewing?.id === id) setViewing(null);
-    await Promise.all([mutateCampaigns(), globalMutate(API.stats)]);
   };
 
   const markReplied = async (logId: string) => {
@@ -625,6 +986,15 @@ export default function CampaignsPage() {
 
       {message && <AlertBanner message={message} onClose={() => setMessage("")} />}
 
+      <ConfirmModal
+        open={confirmOpen}
+        title={confirmTitle}
+        body={confirmBody}
+        checklist={confirmChecklist}
+        actions={confirmActions}
+        onClose={closeConfirm}
+      />
+
       {editing && (
         <div className="mb-8 bg-white rounded-xl border p-6 shadow-sm">
           <h2 className="font-semibold text-lg mb-4">Edit Campaign</h2>
@@ -684,6 +1054,21 @@ export default function CampaignsPage() {
                 value={editing.subject}
                 onChange={(e) => setEditing({ ...editing, subject: e.target.value })}
               />
+              {(() => {
+                const score = scoreEmailContent(editing.subject, editing.bodyHtml);
+                return (
+                  <p
+                    className={`text-xs mt-1 ${
+                      score.flags.length > 0 ? "text-amber-700" : "text-emerald-700"
+                    }`}
+                  >
+                    Content score {score.score}/100
+                    {score.flags.length > 0
+                      ? ` — ${score.flags.slice(0, 2).join("; ")}`
+                      : ""}
+                  </p>
+                );
+              })()}
               <label className="mt-3 flex items-center gap-2 text-sm text-slate-700">
                 <input
                   type="checkbox"
@@ -736,6 +1121,7 @@ export default function CampaignsPage() {
             </div>
             <FollowUpStepsEditor
               followUpDays={editing.followUpDays}
+              followUpTimeOfDay={editing.followUpTimeOfDay || "10:00"}
               followUpSubject={editing.followUpSubject}
               followUpBodyHtml={editing.followUpBodyHtml}
               extraFollowUps={parseExtraFollowUps(editing.extraFollowUps)}
@@ -747,6 +1133,34 @@ export default function CampaignsPage() {
                 setEditing({ ...editing, extraFollowUps })
               }
             />
+            {(editing.status === "sent" || editing.status === "paused") && (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                After saving a new follow-up step, you can queue it for non-repliers on this campaign.
+                <button
+                  type="button"
+                  className="ml-2 font-medium underline"
+                  onClick={async () => {
+                    const qRes = await fetch("/api/campaigns/send", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        campaignId: editing.id,
+                        action: "queue-late-follow-up",
+                      }),
+                    });
+                    const qData = await qRes.json();
+                    setMessage(
+                      qRes.ok
+                        ? qData.message || `Queued ${qData.queued}`
+                        : `Error: ${qData.error || "Queue failed"}`
+                    );
+                    await refreshCampaigns();
+                  }}
+                >
+                  Queue follow-up for non-repliers
+                </button>
+              </div>
+            )}
             <p className="text-xs text-slate-400">
               Use tags: {"{{first_name}}"}, {"{{last_name}}"}, {"{{full_name}}"}, {"{{company}}"}, {"{{title}}"}, {"{{email}}"}
             </p>
@@ -976,6 +1390,7 @@ export default function CampaignsPage() {
                     onClick={() =>
                       setEditing({
                         ...c,
+                        followUpTimeOfDay: c.followUpTimeOfDay || "10:00",
                         extraFollowUps: parseExtraFollowUps(c.extraFollowUps),
                       })
                     }

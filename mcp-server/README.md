@@ -9,22 +9,45 @@ A local virtual environment (`venv/`) is set up to isolate dependencies.
 * `requirements.txt`: Package dependencies.
 * `venv/`: Virtual environment containing all required libraries locally.
 
+## Tools exposed
+* `get_campaign_analytics` — per-campaign sent/open/reply/bounce/fail counts
+* `get_campaign_logs` — recipient-level logs (optional status filter)
+* `get_bounce_insights` — failed/bounced details for a campaign
+* `get_contact_history` — full timeline for one email across campaigns
+* `get_outreach_performance` — initial vs follow-up step performance
+
 ## Installing / Updating Dependencies
-Ensure you install inside the virtual environment:
 ```bash
-# Windows command
-./venv/Scripts/python -m pip install -r requirements.txt
+# Windows (from mcp-server/)
+.\venv\Scripts\python -m pip install -r requirements.txt
 ```
 
+If `venv` does not exist yet:
+```bash
+python -m venv venv
+.\venv\Scripts\python -m pip install -r requirements.txt
+```
+
+Uses `DIRECT_URL` or `DATABASE_URL` from the project root `.env`.
+
 ## Configuring in Cursor
-1. Open Cursor Settings (`Ctrl + Shift + J`).
-2. Go to **Features** -> **MCP**.
-3. Click **+ Add New MCP Server**.
-4. Configure:
-   * **Name**: `email-tracker`
-   * **Type**: `command`
-   * **Command**: 
-     ```bash
-     d:/Desktop/python/EmailSend/mcp-server/venv/Scripts/python d:/Desktop/python/EmailSend/mcp-server/mcp_server.py
-     ```
-5. Click **Save**.
+
+Project config is already in [`.cursor/mcp.json`](../.cursor/mcp.json). Reload MCP (or restart Cursor) after first setup.
+
+Manual / global config (Cursor Settings → MCP → Add server):
+* **Name**: `email-tracker`
+* **Type**: `command`
+* **Command**:
+  ```text
+  C:\Users\jayka\Desktop\crm\mcp-server\venv\Scripts\python.exe
+  ```
+* **Args**:
+  ```text
+  C:\Users\jayka\Desktop\crm\mcp-server\mcp_server.py
+  ```
+
+## Smoke test (stdio)
+```bash
+.\venv\Scripts\python mcp_server.py
+```
+(Leave running only if testing by hand; Cursor starts it automatically when the MCP is enabled.)

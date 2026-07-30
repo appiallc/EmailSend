@@ -62,6 +62,116 @@ export async function ensureSettingsSchema() {
         ALTER TABLE "Settings"
         ADD COLUMN "sendDelayMs" INTEGER NOT NULL DEFAULT 500;
       END IF;
+
+      IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'Settings'
+          AND column_name = 'timezone'
+      ) THEN
+        ALTER TABLE "Settings"
+        ADD COLUMN "timezone" TEXT NOT NULL DEFAULT 'Asia/Kolkata';
+      END IF;
+
+      IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'Settings'
+          AND column_name = 'businessDaysOnly'
+      ) THEN
+        ALTER TABLE "Settings"
+        ADD COLUMN "businessDaysOnly" BOOLEAN NOT NULL DEFAULT true;
+      END IF;
+
+      IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'Settings'
+          AND column_name = 'sendWindowStart'
+      ) THEN
+        ALTER TABLE "Settings"
+        ADD COLUMN "sendWindowStart" TEXT NOT NULL DEFAULT '09:00';
+      END IF;
+
+      IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'Settings'
+          AND column_name = 'sendWindowEnd'
+      ) THEN
+        ALTER TABLE "Settings"
+        ADD COLUMN "sendWindowEnd" TEXT NOT NULL DEFAULT '17:00';
+      END IF;
+
+      IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'Settings'
+          AND column_name = 'dailySendLimit'
+      ) THEN
+        ALTER TABLE "Settings"
+        ADD COLUMN "dailySendLimit" INTEGER NOT NULL DEFAULT 100;
+      END IF;
+
+      IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'Settings'
+          AND column_name = 'bouncePausePercent'
+      ) THEN
+        ALTER TABLE "Settings"
+        ADD COLUMN "bouncePausePercent" INTEGER NOT NULL DEFAULT 5;
+      END IF;
+
+      IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'Settings'
+          AND column_name = 'lastOutboundAt'
+      ) THEN
+        ALTER TABLE "Settings"
+        ADD COLUMN "lastOutboundAt" TIMESTAMP(3);
+      END IF;
+
+      IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'Settings'
+          AND column_name = 'lastOutboundError'
+      ) THEN
+        ALTER TABLE "Settings"
+        ADD COLUMN "lastOutboundError" TEXT NOT NULL DEFAULT '';
+      END IF;
+
+      IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'Settings'
+          AND column_name = 'lastReplyCheckAt'
+      ) THEN
+        ALTER TABLE "Settings"
+        ADD COLUMN "lastReplyCheckAt" TIMESTAMP(3);
+      END IF;
+
+      IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'Settings'
+          AND column_name = 'lastReplyCheckError'
+      ) THEN
+        ALTER TABLE "Settings"
+        ADD COLUMN "lastReplyCheckError" TEXT NOT NULL DEFAULT '';
+      END IF;
+
+      IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'Campaign'
+          AND column_name = 'followUpTimeOfDay'
+      ) THEN
+        ALTER TABLE "Campaign"
+        ADD COLUMN "followUpTimeOfDay" TEXT NOT NULL DEFAULT '10:00';
+      END IF;
     END $$;
   `);
 
@@ -119,7 +229,10 @@ export async function getSettings() {
   } catch (err) {
     if (
       !isMissingColumn(err, "emailSignature") &&
-      !isMissingColumn(err, "sendDelayMs")
+      !isMissingColumn(err, "sendDelayMs") &&
+      !isMissingColumn(err, "timezone") &&
+      !isMissingColumn(err, "dailySendLimit") &&
+      !isMissingColumn(err, "followUpTimeOfDay")
     ) {
       throw err;
     }

@@ -3,11 +3,17 @@ import {
   DEFAULT_FOLLOWUP_BODY,
   DEFAULT_FOLLOWUP_SUBJECT,
 } from "./templates";
+import {
+  DEFAULT_FOLLOWUP_TIME,
+  parseTimeOfDay,
+} from "./send-time";
 
 export interface FollowUpStep {
   days: number;
   subject: string;
   bodyHtml: string;
+  /** Local HH:mm in operator timezone. */
+  timeOfDay: string;
 }
 
 export function parseExtraFollowUps(raw: unknown): FollowUpStep[] {
@@ -20,7 +26,12 @@ export function parseExtraFollowUps(raw: unknown): FollowUpStep[] {
       const subject = String(row.subject ?? "").trim();
       const bodyHtml = String(row.bodyHtml ?? "").trim();
       if (!Number.isFinite(days) || days < 0 || !subject || !bodyHtml) return null;
-      return { days: Math.floor(days), subject, bodyHtml };
+      return {
+        days: Math.floor(days),
+        subject,
+        bodyHtml,
+        timeOfDay: parseTimeOfDay(row.timeOfDay, DEFAULT_FOLLOWUP_TIME),
+      };
     })
     .filter((s): s is FollowUpStep => s !== null);
 }
@@ -29,6 +40,7 @@ export function getFollowUpSteps(campaign: {
   followUpDays: number;
   followUpSubject: string;
   followUpBodyHtml: string;
+  followUpTimeOfDay?: string | null;
   extraFollowUps?: unknown;
 }): FollowUpStep[] {
   const steps: FollowUpStep[] = [];
@@ -37,6 +49,10 @@ export function getFollowUpSteps(campaign: {
       days: campaign.followUpDays,
       subject: campaign.followUpSubject,
       bodyHtml: campaign.followUpBodyHtml,
+      timeOfDay: parseTimeOfDay(
+        campaign.followUpTimeOfDay,
+        DEFAULT_FOLLOWUP_TIME
+      ),
     });
   }
   steps.push(...parseExtraFollowUps(campaign.extraFollowUps));
@@ -51,6 +67,7 @@ export function getFollowUpStepConfig(
   return getFollowUpSteps(campaign)[stepIndex - 1] ?? null;
 }
 
+/** @deprecated Prefer computeFollowUpDueAt from send-time with settings. */
 export function computeFollowUpDue(sentAt: Date, days: number): Date {
   return new Date(sentAt.getTime() + days * 24 * 60 * 60 * 1000);
 }
@@ -87,6 +104,7 @@ export function validateCampaignFollowUps(campaign: {
   followUpDays: number;
   followUpSubject: string;
   followUpBodyHtml: string;
+  followUpTimeOfDay?: string | null;
   extraFollowUps?: unknown;
 }): string | null {
   const defaultHasContent =
@@ -105,11 +123,15 @@ export function validateCampaignFollowUps(campaign: {
   return error ?? null;
 }
 
-export function createEmptyExtraFollowUp(previousDays: number): FollowUpStep {
+export function createEmptyExtraFollowUp(
+  previousDays: number,
+  timeOfDay = DEFAULT_FOLLOWUP_TIME
+): FollowUpStep {
   return {
     days: previousDays,
     subject: DEFAULT_FOLLOWUP_SUBJECT,
     bodyHtml: DEFAULT_FOLLOWUP_BODY,
+    timeOfDay: parseTimeOfDay(timeOfDay, DEFAULT_FOLLOWUP_TIME),
   };
 }
 

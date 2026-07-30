@@ -2,7 +2,6 @@ import { prisma } from "./db";
 import { getSettings } from "./db";
 import { sendTrackedEmail } from "./email";
 import {
-  computeFollowUpDue,
   getFollowUpStepConfig,
   getFollowUpSteps,
 } from "./follow-ups";
@@ -12,10 +11,25 @@ import {
   sleep,
   SOFT_BOUNCE_MAX_RETRIES,
 } from "./deliverability";
-import type { Contact } from "@prisma/client";
+import {
+  computeFollowUpDueAt,
+  getTimezoneDayBounds,
+  isSendAllowedNow,
+  type SendWindowSettings,
+} from "./send-time";
+import type { Contact, Settings } from "@prisma/client";
 
 /** Max emails to send per outbound worker run (avoids HTTP/cron timeouts). */
 export const SEND_BATCH_LIMIT = 25;
+
+function windowFromSettings(settings: Settings): SendWindowSettings {
+  return {
+    timezone: settings.timezone,
+    businessDaysOnly: settings.businessDaysOnly,
+    sendWindowStart: settings.sendWindowStart,
+    sendWindowEnd: settings.sendWindowEnd,
+  };
+}
 
 function pickSubject(
   campaign: { subject: string; subjectB: string; abTesting: boolean },
@@ -27,10 +41,28 @@ function pickSubject(
   return campaign.subject;
 }
 
+async function countSentToday(settings: Settings): Promise<number> {
+  const { start, end } = getTimezoneDayBounds(new Date(), settings.timezone);
+  return prisma.emailLog.count({
+    where: {
+      status: { in: ["sent", "opened", "clicked", "replied"] },
+      sentAt: { gte: start, lt: end },
+    },
+  });
+}
+
+async function remainingDailyQuota(settings: Settings): Promise<number | null> {
+  const limit = Math.max(0, settings.dailySendLimit ?? 0);
+  if (limit <= 0) return null;
+  const sent = await countSentToday(settings);
+  return Math.max(0, limit - sent);
+}
+
 async function scheduleNextFollowUp(
   campaignId: string,
   contactId: string,
-  initialSentAt: Date
+  initialSentAt: Date,
+  settings: Settings
 ) {
   const campaign = await prisma.campaign.findUnique({ where: { id: campaignId } });
   if (!campaign) return;
@@ -54,10 +86,59 @@ async function scheduleNextFollowUp(
     where: { id: initialLog.id },
     data: {
       followUpDue: nextStepConfig
-        ? computeFollowUpDue(initialSentAt, nextStepConfig.days)
+        ? computeFollowUpDueAt({
+            sentAt: initialSentAt,
+            days: nextStepConfig.days,
+            timeOfDay: nextStepConfig.timeOfDay,
+            settings: windowFromSettings(settings),
+          })
         : null,
     },
   });
+}
+
+/** Pause campaign when hard-bounce rate exceeds settings threshold. */
+export async function maybeAutoPauseForBounces(campaignId: string) {
+  const settings = await getSettings();
+  const threshold = Math.max(0, settings.bouncePausePercent ?? 0);
+  if (threshold <= 0) return false;
+
+  const [sentLike, hardBounces] = await Promise.all([
+    prisma.emailLog.count({
+      where: {
+        campaignId,
+        type: "initial",
+        status: {
+          in: ["sent", "opened", "clicked", "replied", "bounced"],
+        },
+      },
+    }),
+    prisma.emailLog.count({
+      where: {
+        campaignId,
+        bounceType: "HARD_BOUNCE",
+      },
+    }),
+  ]);
+
+  if (sentLike < 10) return false;
+  const rate = (hardBounces / sentLike) * 100;
+  if (rate < threshold) return false;
+
+  const updated = await prisma.campaign.updateMany({
+    where: {
+      id: campaignId,
+      status: { in: ["sending", "sent", "scheduled"] },
+    },
+    data: { status: "paused" },
+  });
+  if (updated.count > 0) {
+    console.warn(
+      `[deliverability] Auto-paused campaign ${campaignId}: hard bounce rate ${rate.toFixed(1)}% >= ${threshold}%`
+    );
+    return true;
+  }
+  return false;
 }
 
 export async function sendCampaignEmails(
@@ -69,7 +150,19 @@ export async function sendCampaignEmails(
   if (!campaign) throw new Error("Campaign not found");
 
   const settings = await getSettings();
-  const limit = opts?.limit ?? SEND_BATCH_LIMIT;
+  if (!isSendAllowedNow(new Date(), windowFromSettings(settings))) {
+    return { sent: 0, failed: 0, skipped: 0, total: 0, deferred: true as const };
+  }
+
+  let limit = opts?.limit ?? SEND_BATCH_LIMIT;
+  const remaining = await remainingDailyQuota(settings);
+  if (remaining !== null) {
+    if (remaining <= 0) {
+      return { sent: 0, failed: 0, skipped: 0, total: 0, deferred: true as const };
+    }
+    limit = Math.min(limit, remaining);
+  }
+
   const delayMs = normalizeSendDelayMs(settings.sendDelayMs);
 
   const logs = await prisma.emailLog.findMany({
@@ -127,13 +220,10 @@ export async function sendCampaignEmails(
         if (!stepConfig) {
           throw new Error(`Missing follow-up step ${step}`);
         }
-        const stepSubject = stepConfig.subject.trim();
-        if (stepSubject) {
-          subject = stepSubject;
-        } else {
-          const base = pickSubject(campaign, log.subjectVariant).trim();
-          subject = /^re:/i.test(base) ? base : `Re: ${base}`;
-        }
+        // Gmail (and most clients) thread on subject + In-Reply-To. Keep the same
+        // subject as the initial with a Re: prefix so follow-ups stay in-thread.
+        const base = pickSubject(campaign, log.subjectVariant).trim();
+        subject = /^re:\s*/i.test(base) ? base : `Re: ${base}`;
         bodyHtml = stepConfig.bodyHtml;
       }
 
@@ -157,13 +247,17 @@ export async function sendCampaignEmails(
             campaignId,
             contactId: log.contactId,
             status: { in: ["sent", "opened", "clicked", "replied"] },
+            messageId: { not: null },
           },
           orderBy: { sentAt: "asc" },
         });
 
         if (previousLogs.length > 0) {
+          // Prefer threading off the initial Message-ID; fall back to latest.
+          const initialMsg = previousLogs.find((l) => l.type === "initial");
           const lastLog = previousLogs[previousLogs.length - 1];
-          inReplyTo = lastLog.messageId ?? undefined;
+          inReplyTo =
+            (initialMsg?.messageId || lastLog.messageId) ?? undefined;
           references = previousLogs
             .map((l) => l.messageId)
             .filter((m): m is string => !!m)
@@ -187,7 +281,12 @@ export async function sendCampaignEmails(
       if (type === "initial") {
         const firstStep = getFollowUpSteps(campaign)[0];
         if (firstStep) {
-          followUpDue = computeFollowUpDue(sentAt, firstStep.days);
+          followUpDue = computeFollowUpDueAt({
+            sentAt,
+            days: firstStep.days,
+            timeOfDay: firstStep.timeOfDay,
+            settings: windowFromSettings(settings),
+          });
         }
       }
 
@@ -207,7 +306,12 @@ export async function sendCampaignEmails(
       });
 
       if (type === "followup" && initialLog?.sentAt) {
-        await scheduleNextFollowUp(campaignId, log.contactId, initialLog.sentAt);
+        await scheduleNextFollowUp(
+          campaignId,
+          log.contactId,
+          initialLog.sentAt,
+          settings
+        );
       }
 
       sent++;
@@ -238,7 +342,7 @@ export async function sendCampaignEmails(
     }
   }
 
-  return { sent, failed, skipped, total: logs.length };
+  return { sent, failed, skipped, total: logs.length, deferred: false as const };
 }
 
 /** Re-queue soft-bounced logs whose retry window is due. */
@@ -292,6 +396,11 @@ export async function processSoftBounceRetries(limit = SEND_BATCH_LIMIT) {
 
 /** Mark due scheduled campaigns as sending (send happens in processSendingCampaigns). */
 export async function processDueScheduledCampaigns(): Promise<number> {
+  const settings = await getSettings();
+  if (!isSendAllowedNow(new Date(), windowFromSettings(settings))) {
+    return 0;
+  }
+
   const now = new Date();
   const due = await prisma.campaign.findMany({
     where: {
@@ -486,6 +595,108 @@ export async function processDueFollowUps(): Promise<number> {
   return created;
 }
 
+/**
+ * After adding a new follow-up step on a finished sequence, re-set followUpDue
+ * for eligible contacts who already completed prior steps.
+ */
+export async function queueLateFollowUpStep(campaignId: string): Promise<{
+  queued: number;
+  step: number | null;
+}> {
+  const settings = await getSettings();
+  const campaign = await prisma.campaign.findUnique({ where: { id: campaignId } });
+  if (!campaign) throw new Error("Campaign not found");
+
+  const steps = getFollowUpSteps(campaign);
+  if (steps.length === 0) {
+    return { queued: 0, step: null };
+  }
+
+  const targetStep = steps.length;
+  const stepConfig = steps[targetStep - 1];
+  if (!stepConfig) return { queued: 0, step: null };
+
+  const initials = await prisma.emailLog.findMany({
+    where: {
+      campaignId,
+      type: "initial",
+      status: { in: ["sent", "opened", "clicked"] },
+      followUpDue: null,
+    },
+    include: { contact: true },
+  });
+
+  let queued = 0;
+  const now = new Date();
+
+  for (const log of initials) {
+    if (!log.sentAt) continue;
+
+    const repliedOrBounced = await prisma.emailLog.findFirst({
+      where: {
+        campaignId,
+        contactId: log.contactId,
+        status: { in: ["replied", "bounced"] },
+      },
+    });
+    if (repliedOrBounced) continue;
+
+    if (
+      (await getSuppressedEmailSet([log.contact.email])).has(
+        normalizeEmail(log.contact.email)
+      )
+    ) {
+      continue;
+    }
+
+    const pendingFollowUp = await prisma.emailLog.findFirst({
+      where: {
+        campaignId,
+        contactId: log.contactId,
+        type: "followup",
+        status: "pending",
+      },
+    });
+    if (pendingFollowUp) continue;
+
+    const existingFollowUps = await prisma.emailLog.count({
+      where: {
+        campaignId,
+        contactId: log.contactId,
+        type: "followup",
+        status: { in: ["sent", "opened", "clicked", "replied"] },
+      },
+    });
+
+    if (existingFollowUps !== targetStep - 1) continue;
+
+    let due = computeFollowUpDueAt({
+      sentAt: log.sentAt,
+      days: stepConfig.days,
+      timeOfDay: stepConfig.timeOfDay,
+      settings: windowFromSettings(settings),
+      now,
+    });
+    if (due.getTime() <= now.getTime()) {
+      due = computeFollowUpDueAt({
+        sentAt: now,
+        days: 0,
+        timeOfDay: stepConfig.timeOfDay,
+        settings: windowFromSettings(settings),
+        now,
+      });
+    }
+
+    await prisma.emailLog.update({
+      where: { id: log.id },
+      data: { followUpDue: due },
+    });
+    queued++;
+  }
+
+  return { queued, step: targetStep };
+}
+
 export async function createCampaignWithContacts(
   campaignId: string,
   contacts: Contact[]
@@ -550,4 +761,6 @@ export async function handleReplyOrBounce(campaignId: string, contactId: string)
       status: "pending",
     },
   });
+
+  await maybeAutoPauseForBounces(campaignId);
 }

@@ -16,10 +16,6 @@ export function Sidebar() {
   const pathname = usePathname();
   const { data: session } = useSession();
 
-  if (pathname === "/login") {
-    return null;
-  }
-
   return (
     <aside className="w-64 shrink-0 border-r border-slate-200 bg-slate-950 text-white h-full flex flex-col">
       <div className="p-6 border-b border-slate-800 shrink-0">

@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
-import { Sidebar } from "@/components/Sidebar";
 import { AuthSessionProvider } from "@/components/AuthSessionProvider";
 import { SwrProvider } from "@/components/SwrProvider";
 import "./globals.css";
@@ -31,14 +30,11 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body
-        className="h-full overflow-hidden flex bg-slate-100 text-slate-900"
+        className="h-full overflow-hidden bg-slate-100 text-slate-900"
         suppressHydrationWarning
       >
         <AuthSessionProvider>
-          <SwrProvider>
-            <Sidebar />
-            <main className="flex-1 min-h-0 overflow-auto">{children}</main>
-          </SwrProvider>
+          <SwrProvider>{children}</SwrProvider>
         </AuthSessionProvider>
       </body>
     </html>

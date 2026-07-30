@@ -1,9 +1,9 @@
 import cron from "node-cron";
 import {
-  runFollowUpProcessing,
-  runOutboundProcessing,
-  runReplyCheck,
-} from "./scheduler-tasks";
+  runOutboundWithHealth,
+  runReplyCheckWithHealth,
+} from "./scheduler-health";
+import { runOutboundProcessing } from "./scheduler-tasks";
 
 let started = false;
 
@@ -20,7 +20,7 @@ export function startScheduler() {
   started = true;
 
   cron.schedule("*/15 * * * *", async () => {
-    const result = await runReplyCheck();
+    const result = await runReplyCheckWithHealth();
     if (result.replies > 0) {
       console.log(`[scheduler] Marked ${result.replies} email(s) as replied`);
     }
@@ -31,7 +31,7 @@ export function startScheduler() {
 
   // Outbound: scheduled campaigns + background send batches every minute
   cron.schedule("* * * * *", async () => {
-    const outbound = await runOutboundProcessing();
+    const { followUps, outbound } = await runOutboundWithHealth();
     if (outbound.scheduledQueued > 0 || outbound.sent > 0) {
       console.log(
         `[scheduler] Outbound: queued ${outbound.scheduledQueued} campaign(s), sent ${outbound.sent}, failed ${outbound.failed}`
@@ -41,7 +41,6 @@ export function startScheduler() {
       console.error(`[scheduler] Outbound: ${outbound.error}`);
     }
 
-    const followUps = await runFollowUpProcessing();
     if (followUps.count > 0) {
       console.log(`[scheduler] Created ${followUps.count} follow-up(s)`);
       await runOutboundProcessing();

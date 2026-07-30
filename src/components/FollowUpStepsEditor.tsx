@@ -10,6 +10,7 @@ import {
 } from "@/lib/follow-ups";
 import { EmailPreview } from "@/components/EmailPreview";
 import { HtmlEmailEditor } from "@/components/HtmlEmailEditor";
+import { scoreEmailContent } from "@/lib/send-preflight";
 
 function followUpLabel(index: number) {
   return index === 0 ? "Follow-up 1 (default)" : `Follow-up ${index + 1}`;
@@ -17,6 +18,7 @@ function followUpLabel(index: number) {
 
 export function FollowUpStepsEditor({
   followUpDays,
+  followUpTimeOfDay,
   followUpSubject,
   followUpBodyHtml,
   extraFollowUps,
@@ -25,12 +27,14 @@ export function FollowUpStepsEditor({
   onChangeExtra,
 }: {
   followUpDays: number;
+  followUpTimeOfDay: string;
   followUpSubject: string;
   followUpBodyHtml: string;
   extraFollowUps: FollowUpStep[];
   emailSignature?: string | null;
   onChangeDefault: (patch: {
     followUpDays?: number;
+    followUpTimeOfDay?: string;
     followUpSubject?: string;
     followUpBodyHtml?: string;
   }) => void;
@@ -46,7 +50,14 @@ export function FollowUpStepsEditor({
       extraFollowUps.length > 0
         ? extraFollowUps[extraFollowUps.length - 1].days
         : followUpDays;
-    onChangeExtra([...extraFollowUps, createEmptyExtraFollowUp(lastDays)]);
+    const lastTime =
+      extraFollowUps.length > 0
+        ? extraFollowUps[extraFollowUps.length - 1].timeOfDay
+        : followUpTimeOfDay;
+    onChangeExtra([
+      ...extraFollowUps,
+      createEmptyExtraFollowUp(lastDays, lastTime),
+    ]);
   };
 
   const updateExtra = (index: number, patch: Partial<FollowUpStep>) => {
@@ -59,12 +70,18 @@ export function FollowUpStepsEditor({
     onChangeExtra(extraFollowUps.filter((_, i) => i !== index));
   };
 
+  const defaultScore = scoreEmailContent(followUpSubject, followUpBodyHtml);
+
   return (
     <div className="border-t pt-4 space-y-4">
       <div>
         <h3 className="font-medium text-sm mb-1">Follow-ups (sent after no reply)</h3>
         <p className="text-xs text-slate-400">
-          Days are counted from the initial send. Each step must use the same or a later day than the previous step.
+          Days are counted from the initial send. Each step runs at the time you set
+          (operator timezone). Later steps must be on the same or a later day.
+          Follow-ups send as <code className="text-[11px]">Re: {"{initial subject}"}</code> so
+          they stay in the same Gmail thread — the subject fields below are for your draft notes
+          only and are not used as the outbound Subject header.
         </p>
       </div>
 
@@ -85,7 +102,16 @@ export function FollowUpStepsEditor({
                 });
               }}
             />
-            <p className="text-xs text-slate-400 mt-1">Use 0 to test (due on next scheduler run).</p>
+            <p className="text-xs text-slate-400 mt-1">Use 0 to test (due same day at the time below).</p>
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">Send time</label>
+            <input
+              type="time"
+              className="w-full border rounded-lg px-3 py-2 text-sm bg-white"
+              value={followUpTimeOfDay}
+              onChange={(e) => onChangeDefault({ followUpTimeOfDay: e.target.value })}
+            />
           </div>
         </div>
         <div>
@@ -95,6 +121,11 @@ export function FollowUpStepsEditor({
             value={followUpSubject}
             onChange={(e) => onChangeDefault({ followUpSubject: e.target.value })}
           />
+          {defaultScore.flags.length > 0 && (
+            <p className="text-xs text-amber-700 mt-1">
+              Content {defaultScore.score}/100 — {defaultScore.flags[0]}
+            </p>
+          )}
         </div>
         <div>
           <label className="block text-sm font-medium mb-1">Body (HTML)</label>
@@ -143,6 +174,15 @@ export function FollowUpStepsEditor({
                 }}
               />
               <p className="text-xs text-slate-400 mt-1">Min {minForExtra(index)} days</p>
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">Send time</label>
+              <input
+                type="time"
+                className="w-full border rounded-lg px-3 py-2 text-sm"
+                value={step.timeOfDay || "10:00"}
+                onChange={(e) => updateExtra(index, { timeOfDay: e.target.value })}
+              />
             </div>
           </div>
           <div>

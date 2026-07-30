@@ -37,32 +37,40 @@ export default function UnsubscribePage() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-100 flex items-center justify-center p-6">
-      <div className="w-full max-w-md bg-white rounded-xl border shadow-sm p-8">
-        <h1 className="text-xl font-bold text-slate-900">Unsubscribe</h1>
-        <p className="mt-2 text-sm text-slate-500">
+    <div className="min-h-full w-full flex items-center justify-center px-4 py-10 sm:px-6">
+      <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
+        <p className="text-xs font-medium uppercase tracking-wide text-slate-400">
+          Appia
+        </p>
+        <h1 className="mt-2 text-2xl font-semibold text-slate-900 break-words">
+          Unsubscribe
+        </h1>
+        <p className="mt-2 text-sm leading-relaxed text-slate-600">
           Confirm below to stop receiving outreach emails from Appia.
         </p>
 
         {status === "done" ? (
-          <p className="mt-6 text-sm text-green-800 bg-green-50 border border-green-200 rounded-lg px-4 py-3">
+          <p className="mt-6 text-sm leading-relaxed text-green-800 bg-green-50 border border-green-200 rounded-xl px-4 py-3 break-words">
             {message}
           </p>
         ) : (
           <div className="mt-6 space-y-4">
             {status === "error" && (
-              <p className="text-sm text-red-800 bg-red-50 border border-red-200 rounded-lg px-4 py-3">
+              <p className="text-sm leading-relaxed text-red-800 bg-red-50 border border-red-200 rounded-xl px-4 py-3 break-words">
                 {message}
               </p>
             )}
             <button
               type="button"
               onClick={confirm}
-              disabled={status === "loading"}
-              className="w-full px-4 py-2.5 text-sm font-medium bg-slate-900 text-white rounded-lg hover:bg-slate-800 disabled:opacity-50"
+              disabled={status === "loading" || !trackingId}
+              className="w-full px-4 py-3 text-sm font-medium bg-slate-900 text-white rounded-xl hover:bg-slate-800 disabled:opacity-50"
             >
               {status === "loading" ? "Unsubscribing…" : "Confirm unsubscribe"}
             </button>
+            <p className="text-xs text-slate-400 text-center leading-relaxed">
+              You can close this page after confirming.
+            </p>
           </div>
         )}
       </div>

@@ -15,9 +15,21 @@ export interface Settings {
   imapPass: string;
   baseUrl: string;
   sendDelayMs: number;
+  timezone: string;
+  businessDaysOnly: boolean;
+  sendWindowStart: string;
+  sendWindowEnd: string;
+  dailySendLimit: number;
+  bouncePausePercent: number;
+  lastOutboundAt?: string | null;
+  lastOutboundError?: string;
+  lastReplyCheckAt?: string | null;
+  lastReplyCheckError?: string;
 }
 
-export type SettingsFieldErrors = Partial<Record<keyof Settings | "smtpSecure", string>>;
+export type SettingsFieldErrors = Partial<
+  Record<keyof Settings | "smtpSecure", string>
+>;
 
 function isValidHttpUrl(url: string): boolean {
   try {
@@ -51,12 +63,16 @@ function validatePort(port: number): string | undefined {
   }
 }
 
-/** Saved masked placeholder or any non-empty value counts as set. */
 function passwordIsSet(value: string): boolean {
   const trimmed = value.trim();
   return trimmed.length > 0;
 }
 
+function isValidTimeOfDay(value: string): boolean {
+  return /^([01]?\d|2[0-3]):[0-5]\d$/.test(value.trim());
+}
+
+/** Saved masked placeholder or any non-empty value counts as set. */
 export function validateSettings(settings: Settings): SettingsFieldErrors {
   const errors: SettingsFieldErrors = {};
 
@@ -131,6 +147,39 @@ export function validateSettings(settings: Settings): SettingsFieldErrors {
       settings.sendDelayMs > 60_000)
   ) {
     errors.sendDelayMs = "Send delay must be between 0 and 60000 ms";
+  }
+
+  if (settings.timezone?.trim()) {
+    try {
+      Intl.DateTimeFormat(undefined, { timeZone: settings.timezone.trim() });
+    } catch {
+      errors.timezone = "Enter a valid IANA timezone (e.g. Asia/Kolkata)";
+    }
+  }
+
+  if (settings.sendWindowStart && !isValidTimeOfDay(settings.sendWindowStart)) {
+    errors.sendWindowStart = "Use HH:mm format";
+  }
+  if (settings.sendWindowEnd && !isValidTimeOfDay(settings.sendWindowEnd)) {
+    errors.sendWindowEnd = "Use HH:mm format";
+  }
+
+  if (
+    settings.dailySendLimit !== undefined &&
+    (!Number.isFinite(settings.dailySendLimit) ||
+      settings.dailySendLimit < 0 ||
+      settings.dailySendLimit > 10_000)
+  ) {
+    errors.dailySendLimit = "Daily send limit must be between 0 and 10000";
+  }
+
+  if (
+    settings.bouncePausePercent !== undefined &&
+    (!Number.isFinite(settings.bouncePausePercent) ||
+      settings.bouncePausePercent < 0 ||
+      settings.bouncePausePercent > 100)
+  ) {
+    errors.bouncePausePercent = "Bounce pause % must be between 0 and 100";
   }
 
   return errors;

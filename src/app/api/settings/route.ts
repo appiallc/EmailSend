@@ -3,6 +3,7 @@ import { prisma, getSettings } from "@/lib/db";
 import { PASSWORD_MASK } from "@/lib/password-mask";
 import { encryptSecret } from "@/lib/secrets";
 import { normalizeSendDelayMs } from "@/lib/deliverability";
+import { parseTimeOfDay, resolveTimezone } from "@/lib/send-time";
 
 export async function GET() {
   const settings = await getSettings();
@@ -38,6 +39,30 @@ export async function PUT(request: NextRequest) {
   if (body.sendDelayMs !== undefined) {
     data.sendDelayMs = normalizeSendDelayMs(body.sendDelayMs);
   }
+  if (body.timezone !== undefined) {
+    data.timezone = resolveTimezone(String(body.timezone));
+  }
+  if (body.businessDaysOnly !== undefined) {
+    data.businessDaysOnly = !!body.businessDaysOnly;
+  }
+  if (body.sendWindowStart !== undefined) {
+    data.sendWindowStart = parseTimeOfDay(body.sendWindowStart, "09:00");
+  }
+  if (body.sendWindowEnd !== undefined) {
+    data.sendWindowEnd = parseTimeOfDay(body.sendWindowEnd, "17:00");
+  }
+  if (body.dailySendLimit !== undefined) {
+    const n = Number(body.dailySendLimit);
+    data.dailySendLimit = Number.isFinite(n)
+      ? Math.max(0, Math.min(10_000, Math.floor(n)))
+      : 100;
+  }
+  if (body.bouncePausePercent !== undefined) {
+    const n = Number(body.bouncePausePercent);
+    data.bouncePausePercent = Number.isFinite(n)
+      ? Math.max(0, Math.min(100, Math.floor(n)))
+      : 5;
+  }
 
   if (body.smtpPass && body.smtpPass !== PASSWORD_MASK) {
     data.smtpPass = encryptSecret(String(body.smtpPass));
@@ -51,7 +76,6 @@ export async function PUT(request: NextRequest) {
     data,
   });
 
-  // Return masked + decrypted runtime shape for UI (without leaking ciphertext).
   const runtime = await getSettings();
   return NextResponse.json({
     ...runtime,

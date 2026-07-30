@@ -12,6 +12,7 @@ import {
   normalizeExtraFollowUps,
   validateCampaignFollowUps,
 } from "@/lib/follow-ups";
+import { parseTimeOfDay } from "@/lib/send-time";
 
 function parseFollowUpDays(value: unknown): number {
   const n = Number(value);
@@ -48,6 +49,7 @@ export async function POST(request: NextRequest) {
 
   const followUpPayload = {
     followUpDays: parseFollowUpDays(body.followUpDays ?? 7),
+    followUpTimeOfDay: parseTimeOfDay(body.followUpTimeOfDay, "10:00"),
     followUpSubject: body.followUpSubject || DEFAULT_FOLLOWUP_SUBJECT,
     followUpBodyHtml: body.followUpBodyHtml || DEFAULT_FOLLOWUP_BODY,
     extraFollowUps: normalizeExtraFollowUps(body.extraFollowUps),
@@ -66,7 +68,8 @@ export async function POST(request: NextRequest) {
       abTesting: !!body.abTesting,
       bodyHtml: body.bodyHtml || DEFAULT_INITIAL_BODY,
       ...followUpPayload,
-      extraFollowUps: followUpPayload.extraFollowUps as unknown as Prisma.InputJsonValue,
+      extraFollowUps:
+        followUpPayload.extraFollowUps as unknown as Prisma.InputJsonValue,
     },
   });
 
@@ -104,6 +107,7 @@ export async function PATCH(request: NextRequest) {
     followUpSubject?: string;
     followUpBodyHtml?: string;
     followUpDays?: number;
+    followUpTimeOfDay?: string;
     extraFollowUps?: Prisma.InputJsonValue;
     status?: string;
   } = {};
@@ -114,8 +118,13 @@ export async function PATCH(request: NextRequest) {
   if (body.abTesting !== undefined) data.abTesting = !!body.abTesting;
   if (body.bodyHtml !== undefined) data.bodyHtml = body.bodyHtml;
   if (body.followUpSubject !== undefined) data.followUpSubject = body.followUpSubject;
-  if (body.followUpBodyHtml !== undefined) data.followUpBodyHtml = body.followUpBodyHtml;
-  if (body.followUpDays !== undefined) data.followUpDays = parseFollowUpDays(body.followUpDays);
+  if (body.followUpBodyHtml !== undefined)
+    data.followUpBodyHtml = body.followUpBodyHtml;
+  if (body.followUpDays !== undefined)
+    data.followUpDays = parseFollowUpDays(body.followUpDays);
+  if (body.followUpTimeOfDay !== undefined) {
+    data.followUpTimeOfDay = parseTimeOfDay(body.followUpTimeOfDay, "10:00");
+  }
   if (body.extraFollowUps !== undefined) {
     data.extraFollowUps = normalizeExtraFollowUps(
       body.extraFollowUps
@@ -130,6 +139,7 @@ export async function PATCH(request: NextRequest) {
 
   const merged = {
     followUpDays: data.followUpDays ?? existing.followUpDays,
+    followUpTimeOfDay: data.followUpTimeOfDay ?? existing.followUpTimeOfDay,
     followUpSubject: data.followUpSubject ?? existing.followUpSubject,
     followUpBodyHtml: data.followUpBodyHtml ?? existing.followUpBodyHtml,
     extraFollowUps: data.extraFollowUps ?? existing.extraFollowUps,
@@ -165,9 +175,9 @@ export async function PATCH(request: NextRequest) {
 }
 
 export async function DELETE(request: NextRequest) {
-  const { searchParams } = new URL(request.url);
-  const id = searchParams.get("id");
+  const id = request.nextUrl.searchParams.get("id");
   if (!id) return NextResponse.json({ error: "ID required" }, { status: 400 });
+
   await prisma.campaign.delete({ where: { id } });
   return NextResponse.json({ ok: true });
 }

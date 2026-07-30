@@ -2,6 +2,7 @@ export const API = {
   stats: "/api/stats",
   settings: "/api/settings",
   settingsTestSmtp: "/api/settings/test-smtp",
+  settingsTestImap: "/api/settings/test-imap",
   suppression: "/api/suppression",
   campaigns: "/api/campaigns",
   contactLists: "/api/contact-lists",

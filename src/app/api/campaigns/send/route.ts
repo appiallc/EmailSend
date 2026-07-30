@@ -4,9 +4,13 @@ import { prisma } from "@/lib/db";
 import {
   createCampaignWithContacts,
   processOutboundQueue,
+  queueLateFollowUpStep,
 } from "@/lib/campaign";
 import { resolveContactsForSend } from "@/lib/contact-lists";
 import { getSuppressedEmailSet, normalizeEmail } from "@/lib/suppression";
+import { getSettings } from "@/lib/db";
+import { snapToSendWindow, findFollowUpsBeforeInitial } from "@/lib/send-time";
+import { getFollowUpSteps } from "@/lib/follow-ups";
 
 async function resolveSendContacts(body: {
   campaignId: string;
@@ -158,6 +162,32 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: true, status: nextStatus });
   }
 
+  if (action === "queue-late-follow-up") {
+    if (!campaignId) {
+      return NextResponse.json({ error: "campaignId required" }, { status: 400 });
+    }
+    try {
+      const result = await queueLateFollowUpStep(campaignId);
+      if (result.queued > 0) {
+        kickOutboundWorker();
+      }
+      return NextResponse.json({
+        ok: true,
+        queued: result.queued,
+        step: result.step,
+        message:
+          result.queued > 0
+            ? `Queued follow-up ${result.step} for ${result.queued} non-replier(s).`
+            : "No eligible contacts to queue (already replied, suppressed, or still in sequence).",
+      });
+    } catch (err) {
+      return NextResponse.json(
+        { error: err instanceof Error ? err.message : "Queue failed" },
+        { status: 400 }
+      );
+    }
+  }
+
   if (action === "cancel-schedule") {
     if (!campaignId) {
       return NextResponse.json({ error: "campaignId required" }, { status: 400 });
@@ -232,7 +262,7 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
-    const when = new Date(scheduledAt);
+    let when = new Date(scheduledAt);
     if (Number.isNaN(when.getTime())) {
       return NextResponse.json({ error: "Invalid scheduledAt" }, { status: 400 });
     }
@@ -243,6 +273,24 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const settings = await getSettings();
+    if (settings.businessDaysOnly) {
+      when = snapToSendWindow(when, {
+        timezone: settings.timezone,
+        businessDaysOnly: settings.businessDaysOnly,
+        sendWindowStart: settings.sendWindowStart,
+        sendWindowEnd: settings.sendWindowEnd,
+      });
+      if (when.getTime() <= Date.now()) {
+        when = snapToSendWindow(new Date(Date.now() + 60_000), {
+          timezone: settings.timezone,
+          businessDaysOnly: settings.businessDaysOnly,
+          sendWindowStart: settings.sendWindowStart,
+          sendWindowEnd: settings.sendWindowEnd,
+        });
+      }
+    }
+
     const existing = await prisma.campaign.findUnique({ where: { id: campaignId } });
     if (!existing) {
       return NextResponse.json({ error: "Campaign not found" }, { status: 404 });
@@ -250,6 +298,33 @@ export async function POST(request: NextRequest) {
     if (existing.status === "sending") {
       return NextResponse.json(
         { error: "Campaign is currently sending" },
+        { status: 400 }
+      );
+    }
+
+    const scheduleConflicts = findFollowUpsBeforeInitial({
+      initialAt: when,
+      steps: getFollowUpSteps(existing),
+      timezone: settings.timezone,
+    });
+    if (scheduleConflicts.length > 0) {
+      const detail = scheduleConflicts
+        .map(
+          (c) =>
+            `Follow-up ${c.stepIndex} (${c.days} day(s) at ${c.timeOfDay})`
+        )
+        .join("; ");
+      return NextResponse.json(
+        {
+          error: `Follow-up times are at or before the scheduled initial send (${detail}). Edit follow-up times to after the initial send, then schedule again.`,
+          code: "FOLLOWUP_BEFORE_INITIAL",
+          conflicts: scheduleConflicts.map((c) => ({
+            stepIndex: c.stepIndex,
+            days: c.days,
+            timeOfDay: c.timeOfDay,
+            projectedDue: c.projectedDue.toISOString(),
+          })),
+        },
         { status: 400 }
       );
     }
@@ -299,6 +374,28 @@ export async function POST(request: NextRequest) {
     if (existing.status === "paused") {
       return NextResponse.json(
         { error: "Campaign is paused. Resume it before sending." },
+        { status: 400 }
+      );
+    }
+
+    const settingsForSend = await getSettings();
+    const sendConflicts = findFollowUpsBeforeInitial({
+      initialAt: new Date(),
+      steps: getFollowUpSteps(existing),
+      timezone: settingsForSend.timezone,
+    });
+    if (sendConflicts.length > 0) {
+      const detail = sendConflicts
+        .map(
+          (c) =>
+            `Follow-up ${c.stepIndex} (${c.days} day(s) at ${c.timeOfDay})`
+        )
+        .join("; ");
+      return NextResponse.json(
+        {
+          error: `Follow-up times are at or before now (${detail}). Edit follow-up times to after the initial send, then send again.`,
+          code: "FOLLOWUP_BEFORE_INITIAL",
+        },
         { status: 400 }
       );
     }
