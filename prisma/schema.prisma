@@ -25,6 +25,8 @@ model Contact {
   company       String      @default("")
   title         String      @default("")
   phone         String      @default("")
+  linkedinUrl   String      @default("")
+  companyUrl    String      @default("")
   notes         String      @default("")
   createdAt     DateTime    @default(now())
   contactList   ContactList @relation(fields: [contactListId], references: [id], onDelete: Cascade)

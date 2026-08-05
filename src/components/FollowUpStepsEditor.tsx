@@ -1,11 +1,9 @@
 "use client";
 
-import {
-  DEFAULT_FOLLOWUP_BODY,
-  DEFAULT_FOLLOWUP_SUBJECT,
-} from "@/lib/templates";
+import { DEFAULT_FOLLOWUP_BODY } from "@/lib/templates";
 import {
   createEmptyExtraFollowUp,
+  THREADED_FOLLOWUP_SUBJECT,
   type FollowUpStep,
 } from "@/lib/follow-ups";
 import { EmailPreview } from "@/components/EmailPreview";
@@ -13,25 +11,31 @@ import { HtmlEmailEditor } from "@/components/HtmlEmailEditor";
 import { scoreEmailContent } from "@/lib/send-preflight";
 
 function followUpLabel(index: number) {
-  return index === 0 ? "Follow-up 1 (default)" : `Follow-up ${index + 1}`;
+  return index === 0 ? "Follow-up 1" : `Follow-up ${index + 1}`;
+}
+
+function threadedSubjectPreview(initialSubject: string) {
+  const base = initialSubject.trim() || "(initial subject)";
+  return /^re:\s*/i.test(base) ? base : `Re: ${base}`;
 }
 
 export function FollowUpStepsEditor({
   followUpDays,
   followUpTimeOfDay,
-  followUpSubject,
   followUpBodyHtml,
   extraFollowUps,
   emailSignature,
+  initialSubject = "",
   onChangeDefault,
   onChangeExtra,
 }: {
   followUpDays: number;
   followUpTimeOfDay: string;
-  followUpSubject: string;
   followUpBodyHtml: string;
   extraFollowUps: FollowUpStep[];
   emailSignature?: string | null;
+  /** Campaign initial subject (A) — shown in preview as Re: … */
+  initialSubject?: string;
   onChangeDefault: (patch: {
     followUpDays?: number;
     followUpTimeOfDay?: string;
@@ -44,6 +48,9 @@ export function FollowUpStepsEditor({
     if (index === 0) return followUpDays;
     return extraFollowUps[index - 1]?.days ?? followUpDays;
   };
+
+  const previewSubject = threadedSubjectPreview(initialSubject);
+  const bodyScore = scoreEmailContent(previewSubject, followUpBodyHtml);
 
   const addFollowUp = () => {
     const lastDays =
@@ -62,15 +69,17 @@ export function FollowUpStepsEditor({
 
   const updateExtra = (index: number, patch: Partial<FollowUpStep>) => {
     onChangeExtra(
-      extraFollowUps.map((step, i) => (i === index ? { ...step, ...patch } : step))
+      extraFollowUps.map((step, i) =>
+        i === index
+          ? { ...step, ...patch, subject: THREADED_FOLLOWUP_SUBJECT }
+          : step
+      )
     );
   };
 
   const removeExtra = (index: number) => {
     onChangeExtra(extraFollowUps.filter((_, i) => i !== index));
   };
-
-  const defaultScore = scoreEmailContent(followUpSubject, followUpBodyHtml);
 
   return (
     <div className="border-t pt-4 space-y-4">
@@ -79,9 +88,18 @@ export function FollowUpStepsEditor({
         <p className="text-xs text-slate-400">
           Days are counted from the initial send. Each step runs at the time you set
           (operator timezone). Later steps must be on the same or a later day.
-          Follow-ups send as <code className="text-[11px]">Re: {"{initial subject}"}</code> so
-          they stay in the same Gmail thread — the subject fields below are for your draft notes
-          only and are not used as the outbound Subject header.
+        </p>
+        <p className="text-xs text-slate-600 mt-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+          Subject is always{" "}
+          <code className="text-[11px]">Re: {"{initial subject}"}</code>
+          {initialSubject.trim() ? (
+            <>
+              {" "}
+              — e.g. <span className="font-medium">{previewSubject}</span>
+            </>
+          ) : null}
+          . With A/B testing, each contact keeps their A or B subject in the thread.
+          You only write the follow-up body.
         </p>
       </div>
 
@@ -115,28 +133,25 @@ export function FollowUpStepsEditor({
           </div>
         </div>
         <div>
-          <label className="block text-sm font-medium mb-1">Subject</label>
-          <input
-            className="w-full border rounded-lg px-3 py-2 text-sm bg-white"
-            value={followUpSubject}
-            onChange={(e) => onChangeDefault({ followUpSubject: e.target.value })}
-          />
-          {defaultScore.flags.length > 0 && (
-            <p className="text-xs text-amber-700 mt-1">
-              Content {defaultScore.score}/100 — {defaultScore.flags[0]}
-            </p>
-          )}
-        </div>
-        <div>
           <label className="block text-sm font-medium mb-1">Body (HTML)</label>
           <HtmlEmailEditor
             rows={7}
             value={followUpBodyHtml}
-            onChange={(html) => onChangeDefault({ followUpBodyHtml: html })}
+            onChange={(html) =>
+              onChangeDefault({
+                followUpBodyHtml: html,
+                followUpSubject: THREADED_FOLLOWUP_SUBJECT,
+              })
+            }
           />
+          {bodyScore.flags.length > 0 && (
+            <p className="text-xs text-amber-700 mt-1">
+              Content {bodyScore.score}/100 — {bodyScore.flags[0]}
+            </p>
+          )}
           <EmailPreview
             label={`${followUpLabel(0)} preview`}
-            subject={followUpSubject}
+            subject={previewSubject}
             bodyHtml={followUpBodyHtml}
             signature={emailSignature}
           />
@@ -186,14 +201,6 @@ export function FollowUpStepsEditor({
             </div>
           </div>
           <div>
-            <label className="block text-sm font-medium mb-1">Subject</label>
-            <input
-              className="w-full border rounded-lg px-3 py-2 text-sm"
-              value={step.subject}
-              onChange={(e) => updateExtra(index, { subject: e.target.value })}
-            />
-          </div>
-          <div>
             <label className="block text-sm font-medium mb-1">Body (HTML)</label>
             <HtmlEmailEditor
               rows={7}
@@ -202,7 +209,7 @@ export function FollowUpStepsEditor({
             />
             <EmailPreview
               label={`${followUpLabel(index + 1)} preview`}
-              subject={step.subject}
+              subject={previewSubject}
               bodyHtml={step.bodyHtml}
               signature={emailSignature}
             />
@@ -221,4 +228,4 @@ export function FollowUpStepsEditor({
   );
 }
 
-export { DEFAULT_FOLLOWUP_SUBJECT, DEFAULT_FOLLOWUP_BODY };
+export { DEFAULT_FOLLOWUP_BODY };

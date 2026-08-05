@@ -69,6 +69,8 @@ export async function importContactsToList(
           company: c.company,
           title: c.title,
           phone: c.phone,
+          linkedinUrl: c.linkedinUrl,
+          companyUrl: c.companyUrl,
           notes: c.notes,
         },
       });
@@ -83,6 +85,8 @@ export async function importContactsToList(
           company: c.company,
           title: c.title,
           phone: c.phone,
+          linkedinUrl: c.linkedinUrl,
+          companyUrl: c.companyUrl,
           notes: c.notes,
         },
         update: {
@@ -91,6 +95,8 @@ export async function importContactsToList(
           company: c.company,
           title: c.title,
           phone: c.phone,
+          linkedinUrl: c.linkedinUrl,
+          companyUrl: c.companyUrl,
           notes: c.notes,
         },
       });

@@ -11,6 +11,7 @@ import {
 import { Loader } from "@/components/Loader";
 import { AlertBanner } from "@/components/AlertBanner";
 import { CampaignTrackingTable } from "@/components/CampaignTrackingTable";
+import { CampaignMetricsBar } from "@/components/CampaignMetricsBar";
 import { FollowUpStepsEditor } from "@/components/FollowUpStepsEditor";
 import { EmailPreview } from "@/components/EmailPreview";
 import { HtmlEmailEditor } from "@/components/HtmlEmailEditor";
@@ -18,10 +19,10 @@ import { ConfirmModal } from "@/components/ConfirmModal";
 import { API } from "@/lib/swr";
 import type { Settings } from "@/lib/settings-validation";
 import type { CampaignEmailLog } from "@/lib/campaign-types";
-import { campaignMetrics } from "@/lib/campaign-types";
 import {
   getFollowUpSteps,
   parseExtraFollowUps,
+  THREADED_FOLLOWUP_SUBJECT,
   validateCampaignFollowUps,
   type FollowUpStep,
 } from "@/lib/follow-ups";
@@ -313,11 +314,16 @@ export default function CampaignsPage() {
   const saveCampaign = async () => {
     if (!editing) return;
 
-    const extraFollowUps = parseExtraFollowUps(editing.extraFollowUps);
+    const extraFollowUps = parseExtraFollowUps(editing.extraFollowUps).map(
+      (s) => ({ ...s, subject: THREADED_FOLLOWUP_SUBJECT })
+    );
+    const followUpSubject = editing.followUpBodyHtml.trim()
+      ? THREADED_FOLLOWUP_SUBJECT
+      : editing.followUpSubject || THREADED_FOLLOWUP_SUBJECT;
     const validationError = validateCampaignFollowUps({
       followUpDays: editing.followUpDays,
       followUpTimeOfDay: editing.followUpTimeOfDay,
-      followUpSubject: editing.followUpSubject,
+      followUpSubject,
       followUpBodyHtml: editing.followUpBodyHtml,
       extraFollowUps,
     });
@@ -336,7 +342,7 @@ export default function CampaignsPage() {
         subjectB: editing.subjectB || "",
         abTesting: !!editing.abTesting,
         bodyHtml: editing.bodyHtml,
-        followUpSubject: editing.followUpSubject,
+        followUpSubject,
         followUpBodyHtml: editing.followUpBodyHtml,
         followUpDays: editing.followUpDays,
         followUpTimeOfDay: editing.followUpTimeOfDay || "10:00",
@@ -354,7 +360,7 @@ export default function CampaignsPage() {
     const steps = getFollowUpSteps({
       followUpDays: editing.followUpDays,
       followUpTimeOfDay: editing.followUpTimeOfDay,
-      followUpSubject: editing.followUpSubject,
+      followUpSubject,
       followUpBodyHtml: editing.followUpBodyHtml,
       extraFollowUps,
     });
@@ -1122,10 +1128,10 @@ export default function CampaignsPage() {
             <FollowUpStepsEditor
               followUpDays={editing.followUpDays}
               followUpTimeOfDay={editing.followUpTimeOfDay || "10:00"}
-              followUpSubject={editing.followUpSubject}
               followUpBodyHtml={editing.followUpBodyHtml}
               extraFollowUps={parseExtraFollowUps(editing.extraFollowUps)}
               emailSignature={emailSignature}
+              initialSubject={editing.subject}
               onChangeDefault={(patch) =>
                 setEditing({ ...editing, ...patch })
               }
@@ -1190,6 +1196,12 @@ export default function CampaignsPage() {
               <p className="text-xs text-slate-400 mt-1">
                 Opens are counted only 60+ seconds after send to filter automatic email prefetch.
               </p>
+              <div className="mt-2">
+                <CampaignMetricsBar
+                  logs={viewing.emailLogs}
+                  abTesting={!!viewing.abTesting}
+                />
+              </div>
             </div>
             <div className="flex items-center gap-4">
               <button
@@ -1298,18 +1310,12 @@ export default function CampaignsPage() {
                           : ""}
                       </p>
                     )}
-                    {(() => {
-                      const m = campaignMetrics(c.emailLogs);
-                      return m.sent > 0 ? (
-                        <p className="mt-2 text-xs text-slate-500">
-                          Performance: {m.openRate}% open · {m.replyRate}% reply ·{" "}
-                          {m.bounced} bounced
-                          {c.abTesting && m.variantA.sent + m.variantB.sent > 0
-                            ? ` · A ${m.variantA.openRate}%/${m.variantA.replyRate}% · B ${m.variantB.openRate}%/${m.variantB.replyRate}%`
-                            : ""}
-                        </p>
-                      ) : null;
-                    })()}
+                    <div className="mt-2">
+                      <CampaignMetricsBar
+                        logs={c.emailLogs}
+                        abTesting={!!c.abTesting}
+                      />
+                    </div>
                   </div>
                   {schedulingId === c.id && c.status !== "scheduled" && (
                     <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-3">

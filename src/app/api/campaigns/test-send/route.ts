@@ -43,6 +43,8 @@ export async function POST(request: NextRequest) {
       company: "Test Company",
       title: "",
       phone: "",
+      linkedinUrl: "",
+      companyUrl: "",
       notes: "",
       contactListId: "test",
       createdAt: new Date(),

@@ -12,6 +12,8 @@ export const PREVIEW_CONTACT = {
   company: "Acme Corp",
   title: "VP Engineering",
   phone: "+1 555-0100",
+  linkedinUrl: "https://linkedin.com/in/alexrivera",
+  companyUrl: "https://acme.com",
   notes: "",
   contactListId: "preview",
   createdAt: new Date(0),

@@ -10,11 +10,15 @@ import {
 
 export interface FollowUpStep {
   days: number;
+  /** Stored for DB compatibility; outbound Subject is always Re: {initial}. */
   subject: string;
   bodyHtml: string;
   /** Local HH:mm in operator timezone. */
   timeOfDay: string;
 }
+
+/** Placeholder stored in DB — never used as the SMTP Subject header. */
+export const THREADED_FOLLOWUP_SUBJECT = DEFAULT_FOLLOWUP_SUBJECT;
 
 export function parseExtraFollowUps(raw: unknown): FollowUpStep[] {
   if (!Array.isArray(raw)) return [];
@@ -23,9 +27,10 @@ export function parseExtraFollowUps(raw: unknown): FollowUpStep[] {
       if (!item || typeof item !== "object") return null;
       const row = item as Record<string, unknown>;
       const days = Number(row.days);
-      const subject = String(row.subject ?? "").trim();
       const bodyHtml = String(row.bodyHtml ?? "").trim();
-      if (!Number.isFinite(days) || days < 0 || !subject || !bodyHtml) return null;
+      if (!Number.isFinite(days) || days < 0 || !bodyHtml) return null;
+      const subject =
+        String(row.subject ?? "").trim() || THREADED_FOLLOWUP_SUBJECT;
       return {
         days: Math.floor(days),
         subject,
@@ -44,10 +49,10 @@ export function getFollowUpSteps(campaign: {
   extraFollowUps?: unknown;
 }): FollowUpStep[] {
   const steps: FollowUpStep[] = [];
-  if (campaign.followUpSubject.trim() && campaign.followUpBodyHtml.trim()) {
+  if (campaign.followUpBodyHtml.trim()) {
     steps.push({
       days: campaign.followUpDays,
-      subject: campaign.followUpSubject,
+      subject: campaign.followUpSubject.trim() || THREADED_FOLLOWUP_SUBJECT,
       bodyHtml: campaign.followUpBodyHtml,
       timeOfDay: parseTimeOfDay(
         campaign.followUpTimeOfDay,
@@ -73,7 +78,10 @@ export function computeFollowUpDue(sentAt: Date, days: number): Date {
 }
 
 export function normalizeExtraFollowUps(raw: unknown): FollowUpStep[] {
-  return parseExtraFollowUps(raw);
+  return parseExtraFollowUps(raw).map((step) => ({
+    ...step,
+    subject: THREADED_FOLLOWUP_SUBJECT,
+  }));
 }
 
 export function sanitizeExtraFollowUps(
@@ -107,8 +115,7 @@ export function validateCampaignFollowUps(campaign: {
   followUpTimeOfDay?: string | null;
   extraFollowUps?: unknown;
 }): string | null {
-  const defaultHasContent =
-    !!campaign.followUpSubject.trim() && !!campaign.followUpBodyHtml.trim();
+  const defaultHasContent = !!campaign.followUpBodyHtml.trim();
   const extra = parseExtraFollowUps(campaign.extraFollowUps);
 
   if (extra.length > 0 && !defaultHasContent) {
@@ -129,7 +136,7 @@ export function createEmptyExtraFollowUp(
 ): FollowUpStep {
   return {
     days: previousDays,
-    subject: DEFAULT_FOLLOWUP_SUBJECT,
+    subject: THREADED_FOLLOWUP_SUBJECT,
     bodyHtml: DEFAULT_FOLLOWUP_BODY,
     timeOfDay: parseTimeOfDay(timeOfDay, DEFAULT_FOLLOWUP_TIME),
   };

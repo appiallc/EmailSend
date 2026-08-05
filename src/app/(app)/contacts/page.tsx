@@ -5,6 +5,7 @@ import useSWR, { mutate as globalMutate } from "swr";
 import { CSV_FORMAT } from "@/lib/csv";
 import { Loader } from "@/components/Loader";
 import { AlertBanner } from "@/components/AlertBanner";
+import { ContactsTable } from "@/components/ContactsTable";
 import { API } from "@/lib/swr";
 
 interface Contact {
@@ -15,6 +16,8 @@ interface Contact {
   company: string;
   title: string;
   phone: string;
+  linkedinUrl: string;
+  companyUrl: string;
   notes: string;
 }
 
@@ -33,6 +36,8 @@ const emptyContact = (): Contact => ({
   company: "",
   title: "",
   phone: "",
+  linkedinUrl: "",
+  companyUrl: "",
   notes: "",
 });
 
@@ -61,7 +66,6 @@ export default function ContactsPage() {
   const [showFormat, setShowFormat] = useState(false);
   const [newListName, setNewListName] = useState("");
   const [viewing, setViewing] = useState<ContactList | null>(null);
-  const [contactSearch, setContactSearch] = useState("");
   const [listSearch, setListSearch] = useState("");
   const createFileRef = useRef<HTMLInputElement>(null);
   const replaceFileRef = useRef<HTMLInputElement>(null);
@@ -88,18 +92,6 @@ export default function ContactsPage() {
   } = useSWR<Contact[]>(editing ? API.contacts(editing.id) : null);
 
   const viewContacts = viewContactsData ?? [];
-  const filteredViewContacts = viewContacts.filter((c) => {
-    const q = contactSearch.trim().toLowerCase();
-    if (!q) return true;
-    return (
-      c.email.toLowerCase().includes(q) ||
-      c.firstName.toLowerCase().includes(q) ||
-      c.lastName.toLowerCase().includes(q) ||
-      c.company.toLowerCase().includes(q) ||
-      c.title.toLowerCase().includes(q) ||
-      c.phone.toLowerCase().includes(q)
-    );
-  });
 
   useEffect(() => {
     if (!editing) return;
@@ -255,6 +247,8 @@ export default function ContactsPage() {
               company: c.company,
               title: c.title,
               phone: c.phone,
+              linkedinUrl: c.linkedinUrl,
+              companyUrl: c.companyUrl,
               notes: c.notes,
             })),
           }),
@@ -278,6 +272,8 @@ export default function ContactsPage() {
             company: c.company,
             title: c.title,
             phone: c.phone,
+            linkedinUrl: c.linkedinUrl,
+            companyUrl: c.companyUrl,
             notes: c.notes,
           }),
         });
@@ -332,13 +328,28 @@ export default function ContactsPage() {
     await refreshListsAndStats();
   };
 
-  const deleteContact = async (id: string) => {
-    if (!confirm("Delete this contact?")) return;
-    await fetch(`/api/contacts?id=${id}`, { method: "DELETE" });
-    await Promise.all([
+  const deleteContactsBulk = async (ids: string[]) => {
+    const res = await fetch("/api/contacts", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      setMessage(`Error: ${data.error || "Could not delete contacts"}`);
+      return;
+    }
+    setMessage(`Deleted ${data.deleted ?? ids.length} contact(s).`);
+    const [updatedLists] = await Promise.all([
+      mutateLists(),
       viewing ? mutateViewContacts() : Promise.resolve(),
-      refreshListsAndStats(),
+      globalMutate(API.stats),
+      globalMutate(API.campaigns),
     ]);
+    if (viewing && updatedLists) {
+      const fresh = updatedLists.find((l) => l.id === viewing.id);
+      if (fresh) setViewing(fresh);
+    }
   };
 
   const downloadSample = () => {
@@ -363,6 +374,8 @@ export default function ContactsPage() {
       "company",
       "title",
       "phone",
+      "linkedin_url",
+      "company_url",
       "notes",
     ];
 
@@ -373,6 +386,8 @@ export default function ContactsPage() {
       c.company || "",
       c.title || "",
       c.phone || "",
+      c.linkedinUrl || "",
+      c.companyUrl || "",
       c.notes || "",
     ]);
 
@@ -531,7 +546,7 @@ export default function ContactsPage() {
                 </p>
               ) : (
                 <div className="overflow-x-auto border rounded-lg">
-                  <table className="w-full text-xs min-w-[900px]">
+                  <table className="w-full text-xs min-w-[1100px]">
                     <thead>
                       <tr className="text-left text-slate-500 border-b bg-slate-50">
                         <th className="px-2 py-2 font-medium">Email</th>
@@ -540,6 +555,8 @@ export default function ContactsPage() {
                         <th className="px-2 py-2 font-medium">Company</th>
                         <th className="px-2 py-2 font-medium">Title</th>
                         <th className="px-2 py-2 font-medium">Phone</th>
+                        <th className="px-2 py-2 font-medium">LinkedIn URL</th>
+                        <th className="px-2 py-2 font-medium">Company URL</th>
                         <th className="px-2 py-2 font-medium">Notes</th>
                         <th className="px-2 py-2 font-medium"></th>
                       </tr>
@@ -598,6 +615,26 @@ export default function ContactsPage() {
                               value={c.phone}
                               onChange={(e) =>
                                 updateEditContact(c.id, "phone", e.target.value)
+                              }
+                            />
+                          </td>
+                          <td className="px-2 py-1.5">
+                            <input
+                              className={inputClass}
+                              placeholder="https://linkedin.com/in/…"
+                              value={c.linkedinUrl || ""}
+                              onChange={(e) =>
+                                updateEditContact(c.id, "linkedinUrl", e.target.value)
+                              }
+                            />
+                          </td>
+                          <td className="px-2 py-1.5">
+                            <input
+                              className={inputClass}
+                              placeholder="https://…"
+                              value={c.companyUrl || ""}
+                              onChange={(e) =>
+                                updateEditContact(c.id, "companyUrl", e.target.value)
                               }
                             />
                           </td>
@@ -692,33 +729,19 @@ export default function ContactsPage() {
 
       {viewing && (
         <div className="mb-8 bg-white rounded-xl border shadow-sm overflow-hidden">
-          <div className="px-6 py-4 border-b flex items-center justify-between">
+          <div className="px-6 py-4 border-b flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <div>
               <h2 className="font-semibold">{viewing.name}</h2>
               <p className="text-xs text-slate-400 mt-1">
-                {viewing.contactCount} contact(s)
+                {viewing.contactCount} contact(s) in list
               </p>
             </div>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <button
                 onClick={() => downloadListAsCSV(viewContacts, viewing.name)}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs text-blue-600 border border-blue-200 rounded-lg hover:bg-blue-50 font-medium transition-colors"
                 title="Download Contacts as CSV"
               >
-                <svg
-                  className="w-3.5 h-3.5"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                  xmlns="http://www.w3.org/2000/svg"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
-                  />
-                </svg>
                 Download CSV
               </button>
               <button
@@ -741,7 +764,7 @@ export default function ContactsPage() {
               />
               <button
                 onClick={() => setViewing(null)}
-                className="text-sm text-slate-500 hover:text-slate-800"
+                className="px-3 py-1.5 text-xs text-slate-500 hover:text-slate-800 border rounded-lg"
               >
                 Close
               </button>
@@ -749,59 +772,15 @@ export default function ContactsPage() {
           </div>
           {loadingContacts ? (
             <Loader />
-          ) : viewContacts.length === 0 ? (
-            <p className="p-8 text-center text-slate-500 text-sm">No contacts in this list.</p>
           ) : (
-            <>
-              <div className="px-4 py-3 border-b bg-slate-50/80">
-                <input
-                  type="search"
-                  className="w-full max-w-md border rounded-lg px-3 py-2 text-sm bg-white"
-                  placeholder="Search name, email, company…"
-                  value={contactSearch}
-                  onChange={(e) => setContactSearch(e.target.value)}
-                />
-                <p className="text-xs text-slate-400 mt-1">
-                  Showing {filteredViewContacts.length} of {viewContacts.length}
-                </p>
-              </div>
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left text-slate-500 border-b bg-slate-50">
-                  <th className="px-4 py-3 font-medium">Name</th>
-                  <th className="px-4 py-3 font-medium">Email</th>
-                  <th className="px-4 py-3 font-medium">Company</th>
-                  <th className="px-4 py-3 font-medium">Title</th>
-                  <th className="px-4 py-3 font-medium">Phone</th>
-                  <th className="px-4 py-3 font-medium"></th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredViewContacts.map((c) => (
-                  <tr key={c.id} className="border-b border-slate-50 hover:bg-slate-50">
-                    <td className="px-4 py-3 font-medium">
-                      {[c.firstName, c.lastName].filter(Boolean).join(" ") || "—"}
-                    </td>
-                    <td className="px-4 py-3">{c.email}</td>
-                    <td className="px-4 py-3">{c.company || "—"}</td>
-                    <td className="px-4 py-3">{c.title || "—"}</td>
-                    <td className="px-4 py-3">{c.phone || "—"}</td>
-                    <td className="px-4 py-3 text-right">
-                      <button
-                        onClick={() => deleteContact(c.id)}
-                        className="text-red-500 hover:text-red-700 text-xs"
-                      >
-                        Delete
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {filteredViewContacts.length === 0 && (
-              <p className="p-6 text-center text-sm text-slate-500">No contacts match your search.</p>
-            )}
-            </>
+            <ContactsTable
+              contacts={viewContacts}
+              listName={viewing.name}
+              onDeleteMany={deleteContactsBulk}
+              onDownload={(rows) =>
+                downloadListAsCSV(rows as Contact[], viewing.name)
+              }
+            />
           )}
         </div>
       )}
@@ -822,59 +801,95 @@ export default function ContactsPage() {
             </button>
           </div>
         ) : (
-          <>
-            <input
-              type="search"
-              className="w-full max-w-md border rounded-lg px-3 py-2 text-sm bg-white"
-              placeholder="Search contact lists…"
-              value={listSearch}
-              onChange={(e) => setListSearch(e.target.value)}
-            />
+          <div className="bg-white rounded-xl border shadow-sm overflow-hidden">
+            <div className="px-5 py-4 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center gap-3">
+              <div className="flex-1">
+                <h2 className="font-semibold text-slate-800">Your lists</h2>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Open a list to search, select, and manage contacts
+                </p>
+              </div>
+              <input
+                type="search"
+                className="w-full sm:max-w-xs border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white"
+                placeholder="Search lists…"
+                value={listSearch}
+                onChange={(e) => setListSearch(e.target.value)}
+              />
+            </div>
             {filteredLists.length === 0 ? (
-              <p className="text-sm text-slate-500 py-6 text-center">
+              <p className="text-sm text-slate-500 py-10 text-center">
                 No lists match your search.
               </p>
             ) : (
-              filteredLists.map((list) => (
-            <div key={list.id} className="bg-white rounded-xl border p-5 shadow-sm">
-              <div className="flex items-start justify-between">
-                <div>
-                  <h3 className="font-semibold">{list.name}</h3>
-                  <div className="flex gap-3 mt-2 text-xs text-slate-400">
-                    <span>{list.contactCount} contact(s)</span>
-                    <span>•</span>
-                    <span>{new Date(list.createdAt).toLocaleDateString()}</span>
-                  </div>
-                </div>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => {
-                      setEditing(null);
-                      setContactSearch("");
-                      setViewing(list);
-                    }}
-                    className="px-3 py-1.5 text-xs border rounded-lg hover:bg-slate-50"
-                  >
-                    View
-                  </button>
-                  <button
-                    onClick={() => startEdit(list)}
-                    className="px-3 py-1.5 text-xs border rounded-lg hover:bg-slate-50"
-                  >
-                    Edit
-                  </button>
-                  <button
-                    onClick={() => deleteList(list.id)}
-                    className="px-3 py-1.5 text-xs border border-red-200 text-red-600 rounded-lg hover:bg-red-50"
-                  >
-                    Delete
-                  </button>
-                </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-slate-500 border-b bg-slate-50/80">
+                      <th className="px-5 py-3 font-medium">List name</th>
+                      <th className="px-5 py-3 font-medium">Contacts</th>
+                      <th className="px-5 py-3 font-medium">Created</th>
+                      <th className="px-5 py-3 font-medium text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredLists.map((list) => (
+                      <tr
+                        key={list.id}
+                        className={`border-b border-slate-100 hover:bg-slate-50/80 ${
+                          viewing?.id === list.id ? "bg-blue-50/50" : ""
+                        }`}
+                      >
+                        <td className="px-5 py-3.5">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditing(null);
+                              setViewing(list);
+                            }}
+                            className="font-medium text-slate-900 hover:text-blue-700 text-left"
+                          >
+                            {list.name}
+                          </button>
+                        </td>
+                        <td className="px-5 py-3.5 tabular-nums text-slate-600">
+                          {list.contactCount}
+                        </td>
+                        <td className="px-5 py-3.5 text-slate-500">
+                          {new Date(list.createdAt).toLocaleDateString()}
+                        </td>
+                        <td className="px-5 py-3.5">
+                          <div className="flex justify-end gap-2">
+                            <button
+                              onClick={() => {
+                                setEditing(null);
+                                setViewing(list);
+                              }}
+                              className="px-3 py-1.5 text-xs border rounded-lg hover:bg-white bg-white"
+                            >
+                              View
+                            </button>
+                            <button
+                              onClick={() => startEdit(list)}
+                              className="px-3 py-1.5 text-xs border rounded-lg hover:bg-white bg-white"
+                            >
+                              Edit
+                            </button>
+                            <button
+                              onClick={() => deleteList(list.id)}
+                              className="px-3 py-1.5 text-xs border border-red-200 text-red-600 rounded-lg hover:bg-red-50 bg-white"
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
-            </div>
-              ))
             )}
-          </>
+          </div>
         )}
       </div>
     </div>

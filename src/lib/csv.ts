@@ -7,6 +7,8 @@ export interface ParsedContact {
   company: string;
   title: string;
   phone: string;
+  linkedinUrl: string;
+  companyUrl: string;
   notes: string;
 }
 
@@ -33,6 +35,16 @@ const COLUMN_MAP: Record<string, keyof ParsedContact> = {
   mobile: "phone",
   telephone: "phone",
   tel: "phone",
+  linkedin_url: "linkedinUrl",
+  linkedinurl: "linkedinUrl",
+  linkedin: "linkedinUrl",
+  linked_in: "linkedinUrl",
+  linked_in_url: "linkedinUrl",
+  company_url: "companyUrl",
+  companyurl: "companyUrl",
+  website: "companyUrl",
+  company_website: "companyUrl",
+  company_web: "companyUrl",
   notes: "notes",
   note: "notes",
   comments: "notes",
@@ -40,6 +52,15 @@ const COLUMN_MAP: Record<string, keyof ParsedContact> = {
 
 function normalizeHeader(header: string): string {
   return header.trim().toLowerCase().replace(/\s+/g, "_");
+}
+
+/** Ensure href is absolute so links open correctly. */
+export function normalizeExternalUrl(raw: string): string | null {
+  const value = raw.trim();
+  if (!value) return null;
+  if (/^https?:\/\//i.test(value)) return value;
+  if (/^\/\//.test(value)) return `https:${value}`;
+  return `https://${value}`;
 }
 
 function mapRow(row: Record<string, string>): ParsedContact | null {
@@ -50,6 +71,8 @@ function mapRow(row: Record<string, string>): ParsedContact | null {
     company: "",
     title: "",
     phone: "",
+    linkedinUrl: "",
+    companyUrl: "",
     notes: "",
   };
 
@@ -102,6 +125,6 @@ export function parseContactsCsv(csvText: string): {
   return { contacts, errors };
 }
 
-export const CSV_FORMAT = `email,first_name,last_name,company,title,phone,notes
-john.doe@acme.com,John,Doe,Acme Corp,CTO,+1-555-0100,Met at conference
-jane.smith@techco.io,Jane,Smith,TechCo,IT Director,+1-555-0101,Referred by partner`;
+export const CSV_FORMAT = `email,first_name,last_name,company,title,phone,linkedin_url,company_url,notes
+john.doe@acme.com,John,Doe,Acme Corp,CTO,+1-555-0100,https://linkedin.com/in/johndoe,https://acme.com,Met at conference
+jane.smith@techco.io,Jane,Smith,TechCo,IT Director,+1-555-0101,https://linkedin.com/in/janesmith,https://techco.io,Referred by partner`;

@@ -1,12 +1,9 @@
 "use client";
 
-import { Fragment, useState } from "react";
-import useSWR, { mutate as globalMutate } from "swr";
+import useSWR from "swr";
 import { StatCard } from "@/components/StatCard";
 import { Loader } from "@/components/Loader";
-import { CampaignTrackingTable } from "@/components/CampaignTrackingTable";
 import { API } from "@/lib/swr";
-import { campaignMetrics, type CampaignSummary } from "@/lib/campaign-types";
 import Link from "next/link";
 
 interface Stats {
@@ -17,30 +14,10 @@ interface Stats {
   smtpConfigured: boolean;
 }
 
-function campaignStatusClass(status: string) {
-  if (status === "sent") return "bg-green-100 text-green-700";
-  if (status === "sending") return "bg-blue-100 text-blue-700";
-  if (status === "scheduled") return "bg-amber-100 text-amber-800";
-  if (status === "paused") return "bg-orange-100 text-orange-800";
-  return "bg-slate-100 text-slate-600";
-}
-
 export default function DashboardPage() {
   const { data: stats, isLoading: statsLoading } = useSWR<Stats>(API.stats);
-  const { data: campaigns, isLoading: campaignsLoading } =
-    useSWR<CampaignSummary[]>(API.campaigns);
-  const [expandedId, setExpandedId] = useState<string | null>(null);
 
-  const markReplied = async (logId: string) => {
-    await fetch("/api/email-logs", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: logId, status: "replied" }),
-    });
-    await Promise.all([globalMutate(API.campaigns), globalMutate(API.stats)]);
-  };
-
-  if ((statsLoading && !stats) || (campaignsLoading && !campaigns)) {
+  if (statsLoading && !stats) {
     return <Loader fullPage />;
   }
 
@@ -52,7 +29,6 @@ export default function DashboardPage() {
     );
   }
 
-  const campaignList = campaigns ?? [];
   const totalSent = stats.statusCounts.sent || 0;
   const totalOpened =
     (stats.statusCounts.opened || 0) +
@@ -90,11 +66,7 @@ export default function DashboardPage() {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
         <StatCard label="Contact Lists" value={stats.contactLists ?? 0} accent="blue" />
         <StatCard label="Campaigns" value={stats.campaigns} accent="purple" />
-        <StatCard
-          label="Emails Sent"
-          value={deliveredBase}
-          accent="green"
-        />
+        <StatCard label="Emails Sent" value={deliveredBase} accent="green" />
         <StatCard
           label="Open rate"
           value={`${openRate}%`}
@@ -109,152 +81,22 @@ export default function DashboardPage() {
         />
       </div>
 
-      <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-        <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
-          <div>
-            <h2 className="font-semibold text-slate-800">Campaigns</h2>
-            <p className="text-xs text-slate-400 mt-0.5">
-              Click a row to view sent email tracking
-            </p>
-          </div>
-          <Link
-            href="/campaigns"
-            className="text-sm text-blue-600 hover:underline font-medium"
-          >
-            Manage campaigns →
-          </Link>
+      <div className="mb-8 rounded-xl border border-slate-200 bg-white p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 shadow-sm">
+        <div>
+          <h2 className="font-semibold text-slate-800">Campaign tracking</h2>
+          <p className="text-sm text-slate-500 mt-0.5">
+            Search, filter, and drill into sends, follow-ups, opens, and replies.
+          </p>
         </div>
-
-        {campaignList.length === 0 ? (
-          <div className="p-8 text-center text-slate-500 text-sm">
-            No campaigns yet.{" "}
-            <Link href="/campaigns" className="text-blue-600 underline">
-              Create your first campaign
-            </Link>
-          </div>
-        ) : (
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left text-slate-500 border-b border-slate-100 bg-slate-50/80">
-                <th className="px-4 py-3 font-medium w-8" aria-hidden />
-                <th className="px-6 py-3 font-medium">Campaign</th>
-                <th className="px-6 py-3 font-medium">Status</th>
-                <th className="px-6 py-3 font-medium">Sent</th>
-                <th className="px-6 py-3 font-medium">Open %</th>
-                <th className="px-6 py-3 font-medium">Reply %</th>
-                <th className="px-6 py-3 font-medium">Bounced</th>
-                <th className="px-6 py-3 font-medium">Failed</th>
-              </tr>
-            </thead>
-            <tbody>
-              {campaignList.map((c) => {
-                const m = campaignMetrics(c.emailLogs);
-                const expanded = expandedId === c.id;
-
-                return (
-                  <Fragment key={c.id}>
-                    <tr
-                      role="button"
-                      tabIndex={0}
-                      onClick={() => setExpandedId(expanded ? null : c.id)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" || e.key === " ") {
-                          e.preventDefault();
-                          setExpandedId(expanded ? null : c.id);
-                        }
-                      }}
-                      className={`border-b border-slate-100 cursor-pointer transition-colors ${
-                        expanded
-                          ? "bg-white border-b-0"
-                          : "bg-white hover:bg-slate-50"
-                      }`}
-                    >
-                      <td className="px-4 py-3 text-slate-400">
-                        <span
-                          className={`inline-block transition-transform ${expanded ? "rotate-90" : ""}`}
-                          aria-hidden
-                        >
-                          ▶
-                        </span>
-                      </td>
-                      <td className="px-6 py-3">
-                        <div className="font-medium text-slate-900">{c.name}</div>
-                        {c.subject && (
-                          <div className="text-xs text-slate-400 mt-0.5 truncate max-w-md">
-                            {c.subject}
-                          </div>
-                        )}
-                      </td>
-                      <td className="px-6 py-3">
-                        <span
-                          className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium capitalize ${campaignStatusClass(c.status)}`}
-                        >
-                          {c.status}
-                        </span>
-                      </td>
-                      <td className="px-6 py-3">
-                        {m.sent}/{m.total}
-                      </td>
-                      <td className="px-6 py-3">
-                        {m.openRate}%
-                        <span className="text-xs text-slate-400 ml-1">({m.opened})</span>
-                        {c.abTesting && m.variantA.sent + m.variantB.sent > 0 && (
-                          <div className="text-[10px] text-slate-400 mt-0.5">
-                            A {m.variantA.openRate}% · B {m.variantB.openRate}%
-                          </div>
-                        )}
-                      </td>
-                      <td className="px-6 py-3">
-                        {m.replyRate}%
-                        <span className="text-xs text-slate-400 ml-1">({m.replied})</span>
-                        {c.abTesting && m.variantA.sent + m.variantB.sent > 0 && (
-                          <div className="text-[10px] text-slate-400 mt-0.5">
-                            A {m.variantA.replyRate}% · B {m.variantB.replyRate}%
-                          </div>
-                        )}
-                      </td>
-                      <td className="px-6 py-3">{m.bounced || "—"}</td>
-                      <td className="px-6 py-3">{m.failed || "—"}</td>
-                    </tr>
-                    {expanded && (
-                      <tr className="border-b border-slate-200">
-                        <td colSpan={8} className="p-0 bg-slate-50/50">
-                          <div className="pl-12 pr-6 py-6 border-t border-slate-200/80 border-l-[3px] border-l-blue-600">
-                            <div className="mb-4 flex items-center justify-between gap-4">
-                              <div>
-                                <h3 className="font-semibold text-slate-800 text-sm">
-                                  {c.name} — Email Tracking Logs
-                                </h3>
-                                <p className="text-xs text-slate-400 mt-0.5">
-                                  Track delivery, opens, and replies in real-time.
-                                </p>
-                              </div>
-                              <Link
-                                href="/campaigns"
-                                className="text-xs text-blue-600 hover:text-blue-700 bg-blue-50 border border-blue-100 hover:border-blue-200 px-3 py-1.5 rounded-lg font-medium transition-colors cursor-pointer"
-                                onClick={(e) => e.stopPropagation()}
-                              >
-                                View Campaign Details →
-                              </Link>
-                            </div>
-                            <CampaignTrackingTable
-                              embedded
-                              logs={c.emailLogs}
-                              onMarkReplied={markReplied}
-                            />
-                          </div>
-                        </td>
-                      </tr>
-                    )}
-                  </Fragment>
-                );
-              })}
-            </tbody>
-          </table>
-        )}
+        <Link
+          href="/tracking"
+          className="inline-flex items-center justify-center px-4 py-2 text-sm font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 shrink-0"
+        >
+          Open tracking →
+        </Link>
       </div>
 
-      <div className="mt-8 grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
         <div className="bg-white rounded-xl border p-5">
           <h3 className="font-semibold mb-2">1. Create contact lists</h3>
           <p className="text-slate-500">
@@ -274,10 +116,13 @@ export default function DashboardPage() {
           </Link>
         </div>
         <div className="bg-white rounded-xl border p-5">
-          <h3 className="font-semibold mb-2">3. Auto follow-up in 1 week</h3>
+          <h3 className="font-semibold mb-2">3. Track results</h3>
           <p className="text-slate-500">
-            Contacts who don&apos;t reply get an automatic follow-up after 7 days.
+            Monitor opens, replies, and follow-ups per campaign.
           </p>
+          <Link href="/tracking" className="text-blue-600 mt-2 inline-block hover:underline">
+            Open tracking →
+          </Link>
         </div>
       </div>
     </div>

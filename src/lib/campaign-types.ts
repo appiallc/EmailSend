@@ -30,10 +30,16 @@ export interface CampaignSummary {
   emailLogs: CampaignEmailLog[];
 }
 
+function isSentLike(status: string) {
+  return status !== "pending";
+}
+
+function isDeliveredLike(status: string) {
+  return ["sent", "opened", "clicked", "replied"].includes(status);
+}
+
 export function campaignMetrics(logs: CampaignEmailLog[]) {
-  const delivered = logs.filter((l) =>
-    ["sent", "opened", "clicked", "replied"].includes(l.status)
-  ).length;
+  const delivered = logs.filter((l) => isDeliveredLike(l.status)).length;
   const opened = logs.filter((l) =>
     ["opened", "clicked", "replied"].includes(l.status)
   ).length;
@@ -43,20 +49,33 @@ export function campaignMetrics(logs: CampaignEmailLog[]) {
   const replied = logs.filter((l) => l.status === "replied").length;
   const bounced = logs.filter((l) => l.status === "bounced").length;
   const failed = logs.filter((l) => l.status === "failed").length;
-  const sent = logs.filter((l) => l.status !== "pending").length;
+  const sent = logs.filter((l) => isSentLike(l.status)).length;
+
+  const initialLogs = logs.filter((l) => l.type === "initial");
+  const followUpLogs = logs.filter((l) => l.type === "followup");
+  const initialSent = initialLogs.filter((l) => isSentLike(l.status)).length;
+  const followUpsSent = followUpLogs.filter((l) => isSentLike(l.status)).length;
+  const followUpsPending = followUpLogs.filter(
+    (l) => l.status === "pending"
+  ).length;
+
+  const followUpByStep: Record<number, number> = {};
+  for (const log of followUpLogs) {
+    if (!isSentLike(log.status)) continue;
+    const step = log.followUpStep || 1;
+    followUpByStep[step] = (followUpByStep[step] || 0) + 1;
+  }
 
   const pct = (n: number, d: number) => (d > 0 ? Math.round((n / d) * 100) : 0);
 
   const byVariant = (variant: "A" | "B") => {
     const subset = logs.filter((l) => l.subjectVariant === variant);
-    const vDelivered = subset.filter((l) =>
-      ["sent", "opened", "clicked", "replied"].includes(l.status)
-    ).length;
+    const vDelivered = subset.filter((l) => isDeliveredLike(l.status)).length;
     const vOpened = subset.filter((l) =>
       ["opened", "clicked", "replied"].includes(l.status)
     ).length;
     const vReplied = subset.filter((l) => l.status === "replied").length;
-    const vSent = subset.filter((l) => l.status !== "pending").length;
+    const vSent = subset.filter((l) => isSentLike(l.status)).length;
     return {
       sent: vSent,
       openRate: pct(vOpened, vDelivered || vSent),
@@ -67,6 +86,10 @@ export function campaignMetrics(logs: CampaignEmailLog[]) {
   return {
     total: logs.length,
     sent,
+    initialSent,
+    followUpsSent,
+    followUpsPending,
+    followUpByStep,
     delivered,
     opened,
     clicked,
@@ -80,4 +103,19 @@ export function campaignMetrics(logs: CampaignEmailLog[]) {
     variantA: byVariant("A"),
     variantB: byVariant("B"),
   };
+}
+
+/** Compact summary line for campaign tracking headers. */
+export function formatCampaignFunnelSummary(
+  m: ReturnType<typeof campaignMetrics>
+): string {
+  const stepParts = Object.entries(m.followUpByStep)
+    .sort(([a], [b]) => Number(a) - Number(b))
+    .map(([step, count]) => `FU${step}: ${count}`);
+  const fuDetail =
+    stepParts.length > 0 ? ` (${stepParts.join(" · ")})` : "";
+  return (
+    `${m.initialSent} initial · ${m.followUpsSent} follow-up${m.followUpsSent === 1 ? "" : "s"} sent${fuDetail}` +
+    (m.followUpsPending > 0 ? ` · ${m.followUpsPending} follow-up queued` : "")
+  );
 }

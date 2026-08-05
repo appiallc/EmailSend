@@ -39,6 +39,8 @@ export async function POST(request: NextRequest) {
         company: body.company?.trim() || "",
         title: body.title?.trim() || "",
         phone: body.phone?.trim() || "",
+        linkedinUrl: body.linkedinUrl?.trim() || "",
+        companyUrl: body.companyUrl?.trim() || "",
         notes: body.notes?.trim() || "",
       },
     });
@@ -76,6 +78,8 @@ export async function PATCH(request: NextRequest) {
             company: row.company?.trim() ?? "",
             title: row.title?.trim() ?? "",
             phone: row.phone?.trim() ?? "",
+            linkedinUrl: row.linkedinUrl?.trim() ?? "",
+            companyUrl: row.companyUrl?.trim() ?? "",
             notes: row.notes?.trim() ?? "",
           },
         });
@@ -107,6 +111,10 @@ export async function PATCH(request: NextRequest) {
     if (body.company !== undefined) data.company = String(body.company).trim();
     if (body.title !== undefined) data.title = String(body.title).trim();
     if (body.phone !== undefined) data.phone = String(body.phone).trim();
+    if (body.linkedinUrl !== undefined)
+      data.linkedinUrl = String(body.linkedinUrl).trim();
+    if (body.companyUrl !== undefined)
+      data.companyUrl = String(body.companyUrl).trim();
     if (body.notes !== undefined) data.notes = String(body.notes).trim();
 
     const contact = await prisma.contact.update({ where: { id }, data });
@@ -122,7 +130,35 @@ export async function PATCH(request: NextRequest) {
 export async function DELETE(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const id = searchParams.get("id");
-  if (!id) return NextResponse.json({ error: "ID required" }, { status: 400 });
-  await prisma.contact.delete({ where: { id } });
-  return NextResponse.json({ ok: true });
+  const idsParam = searchParams.get("ids");
+
+  let ids: string[] = [];
+  if (idsParam) {
+    ids = idsParam
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+  } else if (id) {
+    ids = [id];
+  } else {
+    try {
+      const body = await request.json();
+      if (Array.isArray(body?.ids)) {
+        ids = body.ids.map((s: unknown) => String(s).trim()).filter(Boolean);
+      } else if (body?.id) {
+        ids = [String(body.id)];
+      }
+    } catch {
+      // no body
+    }
+  }
+
+  if (ids.length === 0) {
+    return NextResponse.json({ error: "ID or ids required" }, { status: 400 });
+  }
+
+  const result = await prisma.contact.deleteMany({
+    where: { id: { in: ids } },
+  });
+  return NextResponse.json({ ok: true, deleted: result.count });
 }

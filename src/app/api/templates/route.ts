@@ -1,31 +1,66 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import {
+  C2C_VENDOR_BODY,
+  C2C_VENDOR_FOLLOWUP_BODY,
+  C2C_VENDOR_FOLLOWUP_SUBJECT,
+  C2C_VENDOR_SUBJECT_A,
+  C2C_VENDOR_SUBJECT_B,
   DEFAULT_FOLLOWUP_BODY,
   DEFAULT_FOLLOWUP_SUBJECT,
   DEFAULT_INITIAL_BODY,
   DEFAULT_INITIAL_SUBJECT,
 } from "@/lib/templates";
 
+const SEED_TEMPLATES = [
+  {
+    name: "Appia intro",
+    kind: "initial",
+    subject: DEFAULT_INITIAL_SUBJECT,
+    bodyHtml: DEFAULT_INITIAL_BODY,
+  },
+  {
+    name: "Appia follow-up",
+    kind: "followup",
+    subject: DEFAULT_FOLLOWUP_SUBJECT,
+    bodyHtml: DEFAULT_FOLLOWUP_BODY,
+  },
+  {
+    name: "C2C vendor partnership (A)",
+    kind: "initial",
+    subject: C2C_VENDOR_SUBJECT_A,
+    bodyHtml: C2C_VENDOR_BODY,
+  },
+  {
+    name: "C2C vendor partnership (B)",
+    kind: "initial",
+    subject: C2C_VENDOR_SUBJECT_B,
+    bodyHtml: C2C_VENDOR_BODY,
+  },
+  {
+    name: "C2C vendor partnership follow-up",
+    kind: "followup",
+    subject: C2C_VENDOR_FOLLOWUP_SUBJECT,
+    bodyHtml: C2C_VENDOR_FOLLOWUP_BODY,
+  },
+] as const;
+
 async function ensureSeedTemplates() {
   const count = await prisma.emailTemplate.count();
-  if (count > 0) return;
-  await prisma.emailTemplate.createMany({
-    data: [
-      {
-        name: "Appia intro",
-        kind: "initial",
-        subject: DEFAULT_INITIAL_SUBJECT,
-        bodyHtml: DEFAULT_INITIAL_BODY,
-      },
-      {
-        name: "Appia follow-up",
-        kind: "followup",
-        subject: DEFAULT_FOLLOWUP_SUBJECT,
-        bodyHtml: DEFAULT_FOLLOWUP_BODY,
-      },
-    ],
+  if (count === 0) {
+    await prisma.emailTemplate.createMany({ data: [...SEED_TEMPLATES] });
+    return;
+  }
+
+  // Backfill C2C templates on existing installs without overwriting edits
+  const existing = await prisma.emailTemplate.findMany({
+    select: { name: true },
   });
+  const names = new Set(existing.map((t) => t.name));
+  const missing = SEED_TEMPLATES.filter((t) => !names.has(t.name));
+  if (missing.length > 0) {
+    await prisma.emailTemplate.createMany({ data: [...missing] });
+  }
 }
 
 export async function GET() {
