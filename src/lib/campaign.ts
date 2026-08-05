@@ -440,6 +440,7 @@ export async function processSendingCampaigns(): Promise<{
   failed: number;
   skipped: number;
   campaigns: number;
+  deferred: boolean;
 }> {
   const sendingCampaigns = await prisma.campaign.findMany({
     where: { status: "sending" },
@@ -449,6 +450,7 @@ export async function processSendingCampaigns(): Promise<{
   let sent = 0;
   let failed = 0;
   let skipped = 0;
+  let deferred = false;
 
   for (const campaign of sendingCampaigns) {
     const result = await sendCampaignEmails(campaign.id, "initial", {
@@ -457,6 +459,7 @@ export async function processSendingCampaigns(): Promise<{
     sent += result.sent;
     failed += result.failed;
     skipped += result.skipped;
+    if (result.deferred) deferred = true;
   }
 
   const pendingFollowUpCampaignIds = await prisma.emailLog.findMany({
@@ -476,6 +479,7 @@ export async function processSendingCampaigns(): Promise<{
     sent += result.sent;
     failed += result.failed;
     skipped += result.skipped;
+    if (result.deferred) deferred = true;
   }
 
   return {
@@ -483,6 +487,7 @@ export async function processSendingCampaigns(): Promise<{
     failed,
     skipped,
     campaigns: sendingCampaigns.length + pendingFollowUpCampaignIds.length,
+    deferred,
   };
 }
 

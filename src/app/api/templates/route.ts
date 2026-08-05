@@ -45,6 +45,13 @@ const SEED_TEMPLATES = [
   },
 ] as const;
 
+/** Seed template names we keep in sync with code (C2C copy). */
+const SYNCED_SEED_NAMES = new Set([
+  "C2C vendor partnership (A)",
+  "C2C vendor partnership (B)",
+  "C2C vendor partnership follow-up",
+]);
+
 async function ensureSeedTemplates() {
   const count = await prisma.emailTemplate.count();
   if (count === 0) {
@@ -52,14 +59,29 @@ async function ensureSeedTemplates() {
     return;
   }
 
-  // Backfill C2C templates on existing installs without overwriting edits
   const existing = await prisma.emailTemplate.findMany({
-    select: { name: true },
+    select: { id: true, name: true },
   });
-  const names = new Set(existing.map((t) => t.name));
-  const missing = SEED_TEMPLATES.filter((t) => !names.has(t.name));
+  const byName = new Map(existing.map((t) => [t.name, t.id]));
+
+  const missing = SEED_TEMPLATES.filter((t) => !byName.has(t.name));
   if (missing.length > 0) {
     await prisma.emailTemplate.createMany({ data: [...missing] });
+  }
+
+  // Refresh C2C seed copy so India-only wording stays current
+  for (const seed of SEED_TEMPLATES) {
+    if (!SYNCED_SEED_NAMES.has(seed.name)) continue;
+    const id = byName.get(seed.name);
+    if (!id) continue;
+    await prisma.emailTemplate.update({
+      where: { id },
+      data: {
+        subject: seed.subject,
+        bodyHtml: seed.bodyHtml,
+        kind: seed.kind,
+      },
+    });
   }
 }
 

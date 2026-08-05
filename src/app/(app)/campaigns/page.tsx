@@ -589,7 +589,10 @@ export default function CampaignsPage() {
     }
   };
 
-  const pauseOrResume = async (id: string, action: "pause" | "resume") => {
+  const pauseOrResume = async (
+    id: string,
+    action: "pause" | "resume" | "continue"
+  ) => {
     setSendingId(id);
     setMessage("");
     try {
@@ -601,12 +604,17 @@ export default function CampaignsPage() {
       const data = await res.json();
       if (data.error) {
         setMessage(`Error: ${data.error}`);
-      } else {
+      } else if (action === "pause") {
         setMessage(
-          action === "pause"
-            ? "Campaign paused successfully. Follow-ups and schedules are halted."
-            : `Campaign resumed (${data.status}).`
+          "Campaign paused successfully. Follow-ups and schedules are halted."
         );
+      } else if (action === "continue") {
+        setMessage(
+          data.message ||
+            "Continuing send in the background — remaining emails will go out in batches."
+        );
+      } else {
+        setMessage(`Campaign resumed (${data.status}).`);
       }
       await refreshCampaigns();
     } finally {
@@ -1284,6 +1292,11 @@ export default function CampaignsPage() {
                       Paused — sends and follow-ups are halted. Resume to continue.
                     </p>
                   )}
+                  {c.status === "sending" && (
+                    <p className="mt-2 text-xs text-blue-800 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 inline-block">
+                      Sending in batches (~25/min). If progress stalls, click Continue sending. Pause anytime to halt.
+                    </p>
+                  )}
                   {c.status === "scheduled" && c.scheduledAt && (
                     <p className="mt-2 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 inline-block">
                       {scheduleCountdownLabel(c.scheduledAt, nowTick) ??
@@ -1435,14 +1448,27 @@ export default function CampaignsPage() {
                     >
                       Resume
                     </button>
+                  ) : c.status === "sending" ? (
+                    <>
+                      <button
+                        onClick={() => pauseOrResume(c.id, "continue")}
+                        disabled={sendingId !== null}
+                        className="px-3 py-1.5 text-xs border border-blue-300 text-blue-800 rounded-lg hover:bg-blue-50 disabled:opacity-50"
+                      >
+                        {sendingId === c.id ? "Continuing..." : "Continue sending"}
+                      </button>
+                      <button
+                        onClick={() => pauseOrResume(c.id, "pause")}
+                        disabled={sendingId !== null}
+                        className="px-3 py-1.5 text-xs border border-orange-300 text-orange-800 rounded-lg hover:bg-orange-50 disabled:opacity-50"
+                      >
+                        Pause
+                      </button>
+                    </>
                   ) : (
                     <button
                       onClick={() => pauseOrResume(c.id, "pause")}
-                      disabled={
-                        sendingId !== null ||
-                        c.status === "sending" ||
-                        c.status === "draft"
-                      }
+                      disabled={sendingId !== null || c.status === "draft"}
                       className="px-3 py-1.5 text-xs border rounded-lg hover:bg-slate-50 disabled:opacity-50"
                     >
                       Pause

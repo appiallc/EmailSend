@@ -74,10 +74,22 @@ async function audiencePreview(body: {
   };
 }
 
+/** Drain outbound batches until idle / deferred (quota or send window). */
 function kickOutboundWorker() {
   after(async () => {
     try {
-      await processOutboundQueue();
+      // ~25 emails per round; keep going so a send isn't stuck waiting on cron.
+      for (let round = 0; round < 100; round++) {
+        const result = await processOutboundQueue();
+        if (result.deferred) break;
+        const progressed =
+          result.sent +
+          result.failed +
+          result.skipped +
+          result.scheduledQueued +
+          result.softRetries;
+        if (progressed === 0) break;
+      }
     } catch (err) {
       console.error("[send] Background outbound worker failed:", err);
     }
@@ -99,6 +111,42 @@ export async function POST(request: NextRequest) {
     // preview can work with list ids only, but we still require campaignId for consistency
   }
 
+  if (action === "continue") {
+    if (!campaignId) {
+      return NextResponse.json({ error: "campaignId required" }, { status: 400 });
+    }
+    const campaign = await prisma.campaign.findUnique({ where: { id: campaignId } });
+    if (!campaign) {
+      return NextResponse.json({ error: "Campaign not found" }, { status: 404 });
+    }
+    if (campaign.status !== "sending") {
+      return NextResponse.json(
+        { error: "Only campaigns in Sending status can be continued." },
+        { status: 400 }
+      );
+    }
+    const pending = await prisma.emailLog.count({
+      where: {
+        campaignId,
+        status: "pending",
+        type: { in: ["initial", "followup"] },
+      },
+    });
+    if (pending === 0) {
+      return NextResponse.json(
+        { error: "No pending emails left to send." },
+        { status: 400 }
+      );
+    }
+    kickOutboundWorker();
+    return NextResponse.json({
+      ok: true,
+      status: "sending",
+      pending,
+      message: `Continuing send — ${pending} pending email(s).`,
+    });
+  }
+
   if (action === "pause" || action === "resume") {
     if (!campaignId) {
       return NextResponse.json({ error: "campaignId required" }, { status: 400 });
@@ -108,12 +156,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Campaign not found" }, { status: 404 });
     }
     if (action === "pause") {
-      if (campaign.status === "sending") {
+      if (campaign.status === "draft") {
         return NextResponse.json(
-          { error: "Cannot pause while actively sending. Wait for the batch to finish." },
+          { error: "Draft campaigns cannot be paused." },
           { status: 400 }
         );
       }
+      // Allowed while "sending" — stops further batches (in-flight batch may finish).
       await prisma.campaign.update({
         where: { id: campaignId },
         data: {

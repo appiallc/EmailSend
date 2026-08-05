@@ -70,6 +70,7 @@ export async function runOutboundProcessing() {
       failed: 0,
       skipped: 0,
       campaigns: 0,
+      deferred: false,
       error: result.error,
     };
   }
