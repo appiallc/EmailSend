@@ -6,6 +6,8 @@ import { EmailStatusBadge } from "@/components/EmailStatusBadge";
 
 const STATUS_FILTERS = [
   { value: "all", label: "All statuses" },
+  { value: "pending", label: "Pending" },
+  { value: "sending", label: "Sending" },
   { value: "sent", label: "Sent" },
   { value: "opened", label: "Opened" },
   { value: "clicked", label: "Clicked" },
@@ -39,7 +41,9 @@ export function CampaignTrackingTable({
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [typeFilter, setTypeFilter] = useState<string>("all");
 
-  const sentLogs = logs.filter((l) => l.status !== "pending");
+  const sentLogs = logs.filter(
+    (l) => l.status !== "pending" && l.status !== "sending"
+  );
 
   const filteredLogs = sentLogs.filter((log) => {
     if (statusFilter !== "all" && log.status !== statusFilter) return false;

@@ -30,8 +30,12 @@ export interface CampaignSummary {
   emailLogs: CampaignEmailLog[];
 }
 
+function isPendingLike(status: string) {
+  return status === "pending" || status === "sending";
+}
+
 function isSentLike(status: string) {
-  return status !== "pending";
+  return !isPendingLike(status);
 }
 
 function isDeliveredLike(status: string) {
@@ -55,8 +59,8 @@ export function campaignMetrics(logs: CampaignEmailLog[]) {
   const followUpLogs = logs.filter((l) => l.type === "followup");
   const initialSent = initialLogs.filter((l) => isSentLike(l.status)).length;
   const followUpsSent = followUpLogs.filter((l) => isSentLike(l.status)).length;
-  const followUpsPending = followUpLogs.filter(
-    (l) => l.status === "pending"
+  const followUpsPending = followUpLogs.filter((l) =>
+    isPendingLike(l.status)
   ).length;
 
   const followUpByStep: Record<number, number> = {};

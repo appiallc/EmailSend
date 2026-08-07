@@ -17,7 +17,16 @@ import {
   isSendAllowedNow,
   type SendWindowSettings,
 } from "./send-time";
+import {
+  claimPendingEmailLogs,
+  ensureEmailLogSendGuards,
+  QUEUE_STATUSES,
+  releaseOutboundLease,
+  renewOutboundLease,
+  tryAcquireOutboundLease,
+} from "./outbound-claim";
 import type { Contact, Settings } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 
 /** Max emails to send per outbound worker run (avoids HTTP/cron timeouts). */
 export const SEND_BATCH_LIMIT = 25;
@@ -165,12 +174,8 @@ export async function sendCampaignEmails(
 
   const delayMs = normalizeSendDelayMs(settings.sendDelayMs);
 
-  const logs = await prisma.emailLog.findMany({
-    where: { campaignId, type, status: "pending" },
-    include: { contact: true },
-    take: limit,
-    orderBy: { id: "asc" },
-  });
+  // Claim before SMTP so overlapping cron/after() workers cannot send the same row twice.
+  const logs = await claimPendingEmailLogs(campaignId, type, limit);
 
   const suppressed = await getSuppressedEmailSet(logs.map((l) => l.contact.email));
 
@@ -188,6 +193,9 @@ export async function sendCampaignEmails(
             error: "Skipped: email is on the suppression list",
           },
         });
+        await prisma.$executeRaw`
+          UPDATE "EmailLog" SET "claimedAt" = NULL WHERE id = ${log.id}
+        `;
         skipped++;
         continue;
       }
@@ -304,6 +312,9 @@ export async function sendCampaignEmails(
           error: null,
         },
       });
+      await prisma.$executeRaw`
+        UPDATE "EmailLog" SET "claimedAt" = NULL WHERE id = ${log.id}
+      `;
 
       if (type === "followup" && initialLog?.sentAt) {
         await scheduleNextFollowUp(
@@ -326,15 +337,22 @@ export async function sendCampaignEmails(
           error: err instanceof Error ? err.message : "Send failed",
         },
       });
+      await prisma.$executeRaw`
+        UPDATE "EmailLog" SET "claimedAt" = NULL WHERE id = ${log.id}
+      `;
       failed++;
     }
   }
 
   if (type === "initial") {
-    const pending = await prisma.emailLog.count({
-      where: { campaignId, type: "initial", status: "pending" },
+    const remaining = await prisma.emailLog.count({
+      where: {
+        campaignId,
+        type: "initial",
+        status: { in: [...QUEUE_STATUSES] },
+      },
     });
-    if (pending === 0) {
+    if (remaining === 0) {
       await prisma.campaign.update({
         where: { id: campaignId },
         data: { status: "sent", sentAt: new Date(), scheduledAt: null },
@@ -362,8 +380,14 @@ export async function processSoftBounceRetries(limit = SEND_BATCH_LIMIT) {
 
   let requeued = 0;
   for (const log of due) {
-    await prisma.emailLog.update({
-      where: { id: log.id },
+    // Atomic: only one worker can flip bounced → pending for this row.
+    const claimed = await prisma.emailLog.updateMany({
+      where: {
+        id: log.id,
+        status: "bounced",
+        bounceType: "SOFT_BOUNCE",
+        retryCount: { lt: SOFT_BOUNCE_MAX_RETRIES },
+      },
       data: {
         status: "pending",
         retryCount: log.retryCount + 1,
@@ -378,6 +402,10 @@ export async function processSoftBounceRetries(limit = SEND_BATCH_LIMIT) {
         error: `Soft bounce retry #${log.retryCount + 1}`,
       },
     });
+    if (claimed.count === 0) continue;
+    await prisma.$executeRaw`
+      UPDATE "EmailLog" SET "claimedAt" = NULL WHERE id = ${log.id}
+    `;
 
     if (log.type === "initial") {
       await prisma.campaign.updateMany({
@@ -414,7 +442,11 @@ export async function processDueScheduledCampaigns(): Promise<number> {
 
   for (const campaign of due) {
     const pending = await prisma.emailLog.count({
-      where: { campaignId: campaign.id, type: "initial", status: "pending" },
+      where: {
+        campaignId: campaign.id,
+        type: "initial",
+        status: { in: [...QUEUE_STATUSES] },
+      },
     });
     if (pending === 0) {
       await prisma.campaign.update({
@@ -460,12 +492,13 @@ export async function processSendingCampaigns(): Promise<{
     failed += result.failed;
     skipped += result.skipped;
     if (result.deferred) deferred = true;
+    await renewOutboundLease();
   }
 
   const pendingFollowUpCampaignIds = await prisma.emailLog.findMany({
     where: {
       type: "followup",
-      status: "pending",
+      status: { in: [...QUEUE_STATUSES] },
       campaign: { status: { not: "paused" } },
     },
     select: { campaignId: true },
@@ -480,6 +513,7 @@ export async function processSendingCampaigns(): Promise<{
     failed += result.failed;
     skipped += result.skipped;
     if (result.deferred) deferred = true;
+    await renewOutboundLease();
   }
 
   return {
@@ -493,10 +527,33 @@ export async function processSendingCampaigns(): Promise<{
 
 /** Queue due schedules, then drain the send queue. */
 export async function processOutboundQueue() {
-  const softRetries = await processSoftBounceRetries();
-  const scheduledQueued = await processDueScheduledCampaigns();
-  const drain = await processSendingCampaigns();
-  return { softRetries, scheduledQueued, ...drain };
+  await ensureEmailLogSendGuards();
+
+  const acquired = await tryAcquireOutboundLease();
+  if (!acquired) {
+    return {
+      softRetries: 0,
+      scheduledQueued: 0,
+      sent: 0,
+      failed: 0,
+      skipped: 0,
+      campaigns: 0,
+      // Not a send-window deferral — another worker is already draining.
+      deferred: false as const,
+      skippedBusy: true as const,
+    };
+  }
+
+  try {
+    const softRetries = await processSoftBounceRetries();
+    await renewOutboundLease();
+    const scheduledQueued = await processDueScheduledCampaigns();
+    await renewOutboundLease();
+    const drain = await processSendingCampaigns();
+    return { softRetries, scheduledQueued, ...drain, skippedBusy: false as const };
+  } finally {
+    await releaseOutboundLease();
+  }
 }
 
 export async function processDueFollowUps(): Promise<number> {
@@ -529,7 +586,7 @@ export async function processDueFollowUps(): Promise<number> {
         campaignId: log.campaignId,
         contactId: log.contactId,
         type: "followup",
-        status: "pending",
+        status: { in: [...QUEUE_STATUSES] },
       },
     });
     if (pendingFollowUp) continue;
@@ -584,17 +641,39 @@ export async function processDueFollowUps(): Promise<number> {
       continue;
     }
 
-    await prisma.emailLog.create({
-      data: {
-        campaignId: log.campaignId,
-        contactId: log.contactId,
-        type: "followup",
-        followUpStep: nextStep,
-        status: "pending",
-        subjectVariant: log.subjectVariant,
-      },
-    });
-    created++;
+    try {
+      await prisma.$transaction([
+        prisma.emailLog.create({
+          data: {
+            campaignId: log.campaignId,
+            contactId: log.contactId,
+            type: "followup",
+            followUpStep: nextStep,
+            status: "pending",
+            subjectVariant: log.subjectVariant,
+          },
+        }),
+        // Clear due immediately so concurrent cron cannot create another follow-up.
+        prisma.emailLog.update({
+          where: { id: log.id },
+          data: { followUpDue: null },
+        }),
+      ]);
+      created++;
+    } catch (err) {
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === "P2002"
+      ) {
+        // Another worker already created this follow-up step.
+        await prisma.emailLog.update({
+          where: { id: log.id },
+          data: { followUpDue: null },
+        });
+        continue;
+      }
+      throw err;
+    }
   }
 
   return created;
@@ -659,7 +738,7 @@ export async function queueLateFollowUpStep(campaignId: string): Promise<{
         campaignId,
         contactId: log.contactId,
         type: "followup",
-        status: "pending",
+        status: { in: [...QUEUE_STATUSES] },
       },
     });
     if (pendingFollowUp) continue;
@@ -737,6 +816,7 @@ export async function createCampaignWithContacts(
             : "B"
           : null,
       })),
+      skipDuplicates: true,
     });
   }
 
@@ -763,7 +843,7 @@ export async function handleReplyOrBounce(campaignId: string, contactId: string)
       campaignId,
       contactId,
       type: "followup",
-      status: "pending",
+      status: { in: ["pending", "sending"] },
     },
   });
 

@@ -1,5 +1,6 @@
 const colors: Record<string, string> = {
   pending: "bg-slate-100 text-slate-600",
+  sending: "bg-sky-100 text-sky-700",
   sent: "bg-blue-100 text-blue-700",
   opened: "bg-purple-100 text-purple-700",
   clicked: "bg-indigo-100 text-indigo-700",

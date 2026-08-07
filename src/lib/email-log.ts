@@ -1,5 +1,6 @@
 export type EmailLogStatus =
   | "pending"
+  | "sending"
   | "sent"
   | "failed"
   | "opened"
@@ -11,6 +12,7 @@ export type BounceType = "HARD_BOUNCE" | "SOFT_BOUNCE";
 
 export const EMAIL_LOG_STATUSES: EmailLogStatus[] = [
   "pending",
+  "sending",
   "sent",
   "failed",
   "opened",

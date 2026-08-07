@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import useSWR, { mutate as globalMutate } from "swr";
 import {
   DEFAULT_FOLLOWUP_BODY,
@@ -206,6 +206,8 @@ export default function CampaignsPage() {
   const templates = templatesData ?? [];
   const [editing, setEditing] = useState<Campaign | null>(null);
   const [sendingId, setSendingId] = useState<string | null>(null);
+  /** Sync lock — React state alone cannot stop double-clicks before re-render. */
+  const actionLockRef = useRef(false);
   const [schedulingId, setSchedulingId] = useState<string | null>(null);
   const [scheduleDrafts, setScheduleDrafts] = useState<Record<string, string>>({});
   const [nowTick, setNowTick] = useState(() => Date.now());
@@ -233,7 +235,14 @@ export default function CampaignsPage() {
     { label: string; onClick: () => void; variant?: "primary" | "secondary" | "danger" | "ghost" }[]
   >([]);
 
-  const closeConfirm = () => setConfirmOpen(false);
+  const dismissConfirm = () => setConfirmOpen(false);
+
+  const closeConfirm = () => {
+    dismissConfirm();
+    // Backdrop/Escape dismiss must release send locks held while the dialog is open.
+    setSendingId(null);
+    actionLockRef.current = false;
+  };
 
   const openConfirm = (opts: {
     title: string;
@@ -411,8 +420,11 @@ export default function CampaignsPage() {
       return;
     }
 
+    if (actionLockRef.current || sendingId) return;
+    actionLockRef.current = true;
     setSendingId(id);
     setMessage("");
+    let handedToConfirm = false;
     try {
       const previewRes = await fetch("/api/campaigns/send", {
         method: "POST",
@@ -448,6 +460,7 @@ export default function CampaignsPage() {
         timezone: settings?.timezone,
       });
       if (fuConflicts.length > 0) {
+        handedToConfirm = true;
         openConfirm({
           title: "Change follow-up times",
           body: describeFollowUpConflicts(
@@ -461,6 +474,8 @@ export default function CampaignsPage() {
               variant: "primary",
               onClick: () => {
                 closeConfirm();
+                setSendingId(null);
+                actionLockRef.current = false;
                 if (campaign) {
                   setEditing({
                     ...campaign,
@@ -470,7 +485,15 @@ export default function CampaignsPage() {
                 }
               },
             },
-            { label: "Cancel", variant: "ghost", onClick: closeConfirm },
+            {
+              label: "Cancel",
+              variant: "ghost",
+              onClick: () => {
+                closeConfirm();
+                setSendingId(null);
+                actionLockRef.current = false;
+              },
+            },
           ],
         });
         return;
@@ -495,9 +518,15 @@ export default function CampaignsPage() {
         sendWindowEnd: settings?.sendWindowEnd,
       });
 
+      const releaseActionLock = () => {
+        setSendingId(null);
+        actionLockRef.current = false;
+      };
+
       const runSend = async () => {
-        closeConfirm();
+        dismissConfirm();
         setSendingId(id);
+        actionLockRef.current = true;
         try {
           const res = await fetch("/api/campaigns/send", {
             method: "POST",
@@ -530,7 +559,7 @@ export default function CampaignsPage() {
           }
           await Promise.all([refreshCampaigns(), globalMutate(API.stats)]);
         } finally {
-          setSendingId(null);
+          releaseActionLock();
         }
       };
 
@@ -539,6 +568,7 @@ export default function CampaignsPage() {
           ? `\n\nWarning: sending now lands on ${formatRiskLabel(new Date(), settings?.timezone)} (${riskNow.join(", ")}). Weekend/off-hours sends often hurt inbox placement.`
           : "";
 
+      handedToConfirm = true;
       openConfirm({
         title: "Send campaign?",
         body: `Send to ${preview.willSendCount} unique recipient(s)?${
@@ -552,7 +582,14 @@ export default function CampaignsPage() {
         }${riskNote}\n\nThis cannot be undone.`,
         checklist: preflight.items,
         actions: [
-          { label: "Cancel", variant: "ghost", onClick: closeConfirm },
+          {
+            label: "Cancel",
+            variant: "ghost",
+            onClick: () => {
+              closeConfirm();
+              releaseActionLock();
+            },
+          },
           ...(riskNow.includes("weekend")
             ? [
                 {
@@ -560,6 +597,7 @@ export default function CampaignsPage() {
                   variant: "secondary" as const,
                   onClick: () => {
                     closeConfirm();
+                    releaseActionLock();
                     const monday = nextMondayMorning(
                       new Date(),
                       settings?.timezone,
@@ -580,12 +618,21 @@ export default function CampaignsPage() {
           {
             label: preflight.blocking ? "Fix issues first" : "Send now",
             variant: preflight.blocking ? "secondary" : "primary",
-            onClick: preflight.blocking ? closeConfirm : runSend,
+            onClick: preflight.blocking
+              ? () => {
+                  closeConfirm();
+                  releaseActionLock();
+                }
+              : runSend,
           },
         ],
       });
     } finally {
-      setSendingId(null);
+      // Keep lock while confirm dialog is open so Send can't be clicked again.
+      if (!handedToConfirm) {
+        setSendingId(null);
+        actionLockRef.current = false;
+      }
     }
   };
 
@@ -593,6 +640,8 @@ export default function CampaignsPage() {
     id: string,
     action: "pause" | "resume" | "continue"
   ) => {
+    if (actionLockRef.current || sendingId) return;
+    actionLockRef.current = true;
     setSendingId(id);
     setMessage("");
     try {
@@ -619,6 +668,7 @@ export default function CampaignsPage() {
       await refreshCampaigns();
     } finally {
       setSendingId(null);
+      actionLockRef.current = false;
     }
   };
 
@@ -923,7 +973,9 @@ export default function CampaignsPage() {
   };
 
   const downloadLogsAsCSV = (logs: CampaignEmailLog[], campaignName: string) => {
-    const sentLogs = logs.filter((l) => l.status !== "pending");
+    const sentLogs = logs.filter(
+      (l) => l.status !== "pending" && l.status !== "sending"
+    );
     if (sentLogs.length === 0) {
       alert("No email logs to download yet.");
       return;

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 export type ConfirmModalAction = {
   label: string;
@@ -23,14 +23,20 @@ export function ConfirmModal({
   actions: ConfirmModalAction[];
   onClose: () => void;
 }) {
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!open) setBusy(false);
+  }, [open]);
+
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape" && !busy) onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
+  }, [open, onClose, busy]);
 
   if (!open) return null;
 
@@ -53,7 +59,9 @@ export function ConfirmModal({
       role="dialog"
       aria-modal="true"
       aria-labelledby="confirm-modal-title"
-      onClick={onClose}
+      onClick={() => {
+        if (!busy) onClose();
+      }}
     >
       <div
         className="w-full max-w-lg rounded-xl bg-white shadow-xl border border-slate-200"
@@ -100,8 +108,13 @@ export function ConfirmModal({
             <button
               key={action.label}
               type="button"
-              className={`px-3 py-2 text-sm rounded-lg ${btnClass(action.variant)}`}
-              onClick={action.onClick}
+              disabled={busy}
+              className={`px-3 py-2 text-sm rounded-lg disabled:opacity-50 ${btnClass(action.variant)}`}
+              onClick={() => {
+                if (busy) return;
+                setBusy(true);
+                action.onClick();
+              }}
             >
               {action.label}
             </button>

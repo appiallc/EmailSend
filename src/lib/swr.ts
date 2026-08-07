@@ -7,6 +7,8 @@ export const API = {
   campaigns: "/api/campaigns",
   contactLists: "/api/contact-lists",
   templates: "/api/templates",
+  leads: "/api/leads",
+  leadsMoveToList: "/api/leads/move-to-list",
   contacts: (listId: string) => `/api/contacts?listId=${encodeURIComponent(listId)}`,
 } as const;
 

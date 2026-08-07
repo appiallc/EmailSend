@@ -75,12 +75,24 @@ async function audiencePreview(body: {
 }
 
 /** Drain outbound batches until idle / deferred (quota or send window). */
+let outboundKickInFlight = false;
+
 function kickOutboundWorker() {
+  // Same Node process: ignore rapid Continue/Resume/Send double-clicks.
+  // Cross-instance overlap is handled by the outbound lease + row claims.
+  if (outboundKickInFlight) return;
+  outboundKickInFlight = true;
+
   after(async () => {
     try {
       // ~25 emails per round; keep going so a send isn't stuck waiting on cron.
       for (let round = 0; round < 100; round++) {
         const result = await processOutboundQueue();
+        if ("skippedBusy" in result && result.skippedBusy) {
+          // Another worker holds the drain lease — wait briefly then retry.
+          await new Promise((r) => setTimeout(r, 1500));
+          continue;
+        }
         if (result.deferred) break;
         const progressed =
           result.sent +
@@ -92,6 +104,8 @@ function kickOutboundWorker() {
       }
     } catch (err) {
       console.error("[send] Background outbound worker failed:", err);
+    } finally {
+      outboundKickInFlight = false;
     }
   });
 }
@@ -128,7 +142,7 @@ export async function POST(request: NextRequest) {
     const pending = await prisma.emailLog.count({
       where: {
         campaignId,
-        status: "pending",
+        status: { in: ["pending", "sending"] },
         type: { in: ["initial", "followup"] },
       },
     });
@@ -138,6 +152,7 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
+    // Idempotent: at most one in-process drain; lease/claims prevent duplicate SMTP.
     kickOutboundWorker();
     return NextResponse.json({
       ok: true,
@@ -162,18 +177,39 @@ export async function POST(request: NextRequest) {
           { status: 400 }
         );
       }
-      // Allowed while "sending" — stops further batches (in-flight batch may finish).
-      await prisma.campaign.update({
-        where: { id: campaignId },
-        data: {
-          status: "paused",
-          // keep scheduledAt so resume can restore intent, but halt processing via status
+      if (campaign.status === "paused") {
+        return NextResponse.json({ ok: true, status: "paused", already: true });
+      }
+      // Atomic: only one pause wins if clicked repeatedly.
+      const paused = await prisma.campaign.updateMany({
+        where: {
+          id: campaignId,
+          status: { in: ["sending", "scheduled", "sent"] },
         },
+        data: { status: "paused" },
       });
+      if (paused.count === 0) {
+        return NextResponse.json(
+          { error: "Campaign could not be paused (status changed)." },
+          { status: 409 }
+        );
+      }
       return NextResponse.json({ ok: true, status: "paused" });
     }
 
-    // resume — restore the most useful prior state
+    // resume — only from paused (blocks double-resume kicking extra workers)
+    if (campaign.status !== "paused") {
+      return NextResponse.json(
+        {
+          error:
+            campaign.status === "sending"
+              ? "Campaign is already sending."
+              : `Cannot resume from status "${campaign.status}".`,
+        },
+        { status: 400 }
+      );
+    }
+
     const hasFutureSchedule =
       !!campaign.scheduledAt && campaign.scheduledAt.getTime() > Date.now();
     const hasDelivered = await prisma.emailLog.count({
@@ -183,7 +219,11 @@ export async function POST(request: NextRequest) {
       },
     });
     const hasPendingInitial = await prisma.emailLog.count({
-      where: { campaignId, type: "initial", status: "pending" },
+      where: {
+        campaignId,
+        type: "initial",
+        status: { in: ["pending", "sending"] },
+      },
     });
 
     let nextStatus: string;
@@ -197,14 +237,19 @@ export async function POST(request: NextRequest) {
       nextStatus = "draft";
     }
 
-    await prisma.campaign.update({
-      where: { id: campaignId },
+    const resumed = await prisma.campaign.updateMany({
+      where: { id: campaignId, status: "paused" },
       data: {
         status: nextStatus,
-        // Clear stale schedule if we are no longer scheduled
         scheduledAt: nextStatus === "scheduled" ? campaign.scheduledAt : null,
       },
     });
+    if (resumed.count === 0) {
+      return NextResponse.json(
+        { error: "Campaign was already resumed." },
+        { status: 409 }
+      );
+    }
     if (nextStatus === "sending") {
       kickOutboundWorker();
     }
@@ -381,7 +426,11 @@ export async function POST(request: NextRequest) {
     const prepared = await createCampaignWithContacts(campaignId, contacts);
 
     const pendingCount = await prisma.emailLog.count({
-      where: { campaignId, type: "initial", status: "pending" },
+      where: {
+        campaignId,
+        type: "initial",
+        status: { in: ["pending", "sending"] },
+      },
     });
     if (pendingCount === 0) {
       return NextResponse.json(
@@ -451,7 +500,11 @@ export async function POST(request: NextRequest) {
 
     const prepared = await createCampaignWithContacts(campaignId, contacts);
     const pendingCount = await prisma.emailLog.count({
-      where: { campaignId, type: "initial", status: "pending" },
+      where: {
+        campaignId,
+        type: "initial",
+        status: { in: ["pending", "sending"] },
+      },
     });
 
     if (pendingCount === 0) {
@@ -466,10 +519,20 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    await prisma.campaign.update({
-      where: { id: campaignId },
+    // Atomic: only one Send click can take ownership of the campaign.
+    const started = await prisma.campaign.updateMany({
+      where: {
+        id: campaignId,
+        status: { in: ["draft", "scheduled", "sent"] },
+      },
       data: { status: "sending", scheduledAt: null },
     });
+    if (started.count === 0) {
+      return NextResponse.json(
+        { error: "Campaign is already sending or paused." },
+        { status: 409 }
+      );
+    }
 
     kickOutboundWorker();
 

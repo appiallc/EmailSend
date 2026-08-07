@@ -74,13 +74,16 @@ model EmailLog {
   contactId      String
   type           String // initial | followup
   followUpStep   Int       @default(0) // 0 = initial; 1+ = follow-up sequence
-  status         String    @default("pending") // pending | sent | failed | opened | clicked | replied | bounced
+  /** pending | sending | sent | failed | opened | clicked | replied | bounced */
+  status         String    @default("pending")
   trackingId     String    @unique @default(cuid())
   messageId      String?
   error          String?
   subjectVariant String? // A | B when campaign A/B is on
   retryCount     Int       @default(0)
   retryAt        DateTime?
+  /** Set when a worker claims a pending row (status → sending) before SMTP. */
+  claimedAt      DateTime?
   sentAt         DateTime?
   openedAt       DateTime?
   clickedAt      DateTime?
@@ -92,10 +95,12 @@ model EmailLog {
   campaign       Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
   contact        Contact   @relation(fields: [contactId], references: [id], onDelete: Cascade)
 
+  @@unique([campaignId, contactId, type, followUpStep])
   @@index([campaignId])
   @@index([contactId])
   @@index([followUpDue])
   @@index([status, retryAt])
+  @@index([status, claimedAt])
 }
 
 model Settings {
@@ -131,6 +136,8 @@ model Settings {
   lastOutboundError    String     @default("")
   lastReplyCheckAt     DateTime?
   lastReplyCheckError  String     @default("")
+  /** Exclusive outbound drain lease; prevents overlapping cron/after workers. */
+  outboundLeaseUntil   DateTime?
 }
 
 /** Global do-not-email list (unsubscribe, hard bounce, manual). */
@@ -155,4 +162,28 @@ model EmailTemplate {
   updatedAt DateTime @updatedAt
 
   @@index([kind])
+}
+
+/** Research leads (Upwork / LinkedIn / etc.) — before campaign contact lists. */
+model Lead {
+  id                 String   @id @default(cuid())
+  contactName        String   @default("")
+  email              String   @default("")
+  company            String   @default("")
+  title              String   @default("")
+  phone              String   @default("")
+  upworkJobUrl       String   @default("")
+  linkedinProfileUrl String   @default("")
+  linkedinCompanyUrl String   @default("")
+  companyWebsite     String   @default("")
+  source             String   @default("") // Upwork | LinkedIn | Other
+  status             String   @default("new") // new | researching | ready | contacted
+  researchedBy       String   @default("")
+  notes              String   @default("")
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([status])
+  @@index([createdAt])
+  @@index([email])
 }

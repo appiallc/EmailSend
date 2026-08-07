@@ -41,7 +41,9 @@ export async function GET() {
       status: c.status,
       createdAt: c.createdAt,
       total: c._count.emailLogs,
-      sent: c.emailLogs.filter((l) => l.status !== "pending").length,
+      sent: c.emailLogs.filter(
+        (l) => l.status !== "pending" && l.status !== "sending"
+      ).length,
       opened: c.emailLogs.filter((l) =>
         ["opened", "clicked", "replied"].includes(l.status)
       ).length,

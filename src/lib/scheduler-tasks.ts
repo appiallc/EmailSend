@@ -71,6 +71,7 @@ export async function runOutboundProcessing() {
       skipped: 0,
       campaigns: 0,
       deferred: false,
+      skippedBusy: false,
       error: result.error,
     };
   }

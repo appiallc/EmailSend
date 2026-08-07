@@ -166,6 +166,16 @@ export async function ensureSettingsSchema() {
       IF NOT EXISTS (
         SELECT 1 FROM information_schema.columns
         WHERE table_schema = 'public'
+          AND table_name = 'Settings'
+          AND column_name = 'outboundLeaseUntil'
+      ) THEN
+        ALTER TABLE "Settings"
+        ADD COLUMN "outboundLeaseUntil" TIMESTAMP(3);
+      END IF;
+
+      IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public'
           AND table_name = 'Campaign'
           AND column_name = 'followUpTimeOfDay'
       ) THEN
